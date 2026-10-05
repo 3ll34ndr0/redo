@@ -209,3 +209,28 @@ __marimo__/
 # Olso the files where I will save secrets and configurations
 .env
 .secrets
+
+# alignment eval: generated audio and outputs
+lyrics/eval/audio/
+lyrics/eval/out/
+
+# songs re-encoded for the live site (lyrics/reencode.sh): audio, never committed
+lyrics/music_128/
+CLAUDE.MD
+
+# never committed (size + copyright): songs, stems, search database, clip cache
+lyrics/music/
+lyrics/separated/
+lyrics/corpus/
+
+# lyrics (copyright): a separate PRIVATE repo, redo-letras, cloned here
+lyrics/text/
+
+# old experiments, superseded; contain lyrics, audio and databases
+lyrics/mfa/
+lyrics/la_bestia_pop/
+lyrics/.la_bestia_pop/
+webno/
+*.db
+*.db.*
+web/static/snippets/

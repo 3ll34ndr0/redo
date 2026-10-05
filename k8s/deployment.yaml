@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: extractos
+  namespace: extractos
+spec:
+  # ONE replica, ONE gunicorn worker: rate limits and the search index live in memory.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: extractos
+  template:
+    metadata:
+      labels:
+        app: extractos
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+      containers:
+        - name: extractos
+          # The tag is rewritten by .github/workflows/deploy.yml on every build
+          image: ghcr.io/3ll34ndr0/redo:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5000
+          env:
+            - name: SNIPPET_CACHE_MB      # app deletes the oldest clips above this
+              value: "300"
+          securityContext:
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+          volumeMounts:
+            # Songs (music/) + search database (redondos.db), copied to the VPS with rsync.
+            # The whole folder is mounted (not the .db file alone) so a new database
+            # copied over is seen by the app, which reloads it when it changes.
+            - name: data
+              mountPath: /data
+              readOnly: true
+            - name: cache
+              mountPath: /cache
+            - name: tmp
+              mountPath: /tmp
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5000
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: 50m
+              memory: 96Mi
+            limits:
+              cpu: 500m
+              memory: 384Mi
+      volumes:
+        - name: data
+          hostPath:
+            path: /srv/extractos
+            type: Directory
+        - name: cache                    # clips cut so far; lost on restart, re-cut on demand
+          emptyDir:
+            sizeLimit: 512Mi
+        - name: tmp
+          emptyDir:
+            sizeLimit: 64Mi

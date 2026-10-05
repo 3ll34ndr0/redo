@@ -1,0 +1,21 @@
+# Apply once: kubectl apply -f argocd-application.yaml  (then Argo CD keeps k8s/ in sync)
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: extractos
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/3ll34ndr0/redo.git   # public repo: no credentials
+    targetRevision: HEAD
+    path: k8s
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: extractos
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

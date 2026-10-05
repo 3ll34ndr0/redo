@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Extractos | Buscador</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .bg-argentina {
+            background: linear-gradient(180deg, #74ACDF 0%, #FFFFFF 50%, #74ACDF 100%);
+        }
+        .btn-celeste { background-color: #74ACDF; transition: all 0.3s; }
+        .btn-celeste:hover { background-color: #5b92c4; transform: translateY(-2px); }
+        .audio-card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
+        .lyric mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
+        #suggestions li[aria-selected="true"] { background: #74ACDF22; }
+    </style>
+</head>
+<body class="bg-argentina min-h-screen pb-20">
+
+    <header class="text-center pt-12 pb-8">
+        <h1 class="text-4xl font-extrabold text-gray-800 tracking-tight">Extractos</h1>
+        <p class="text-gray-600 font-medium">Fragmentos de la música de los Redondos</p>
+    </header>
+
+    <main class="max-w-2xl mx-auto px-4">
+        <div class="relative bg-white rounded-2xl shadow-2xl p-2 mb-10 flex items-center">
+            <form action="/search" method="get" class="flex w-full" id="search-form">
+                <input type="text" name="lyric" required id="lyric" value="{{ query or '' }}"
+                    autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false"
+                    placeholder="Ej: 'todo un palo' o 'ñam fri frufi'..." 
+                    class="w-full min-w-0 px-6 py-4 rounded-xl focus:outline-none text-lg text-gray-700">
+                <button type="submit" 
+                    class="btn-celeste text-white px-8 py-4 rounded-xl font-bold shadow-md">
+                    BUSCAR
+                </button>
+            </form>
+            <ul id="suggestions" role="listbox" hidden
+                class="absolute left-0 right-0 top-full mt-2 z-10 bg-white rounded-xl shadow-2xl overflow-hidden"></ul>
+        </div>
+
+        <div class="space-y-6">
+            {% if results %}
+                <h2 class="text-xl font-bold text-gray-700 mb-4 px-2">
+                    {% if exact %}Resultados encontrados:{% else %}No está tal cual. Lo más parecido:{% endif %}
+                </h2>
+                {% set kinds = {'exact': 'Exacto', 'partial': 'Completado', 'approx': 'Parecido'} %}
+                {% for item in results %}
+                <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
+                    data-clip="{{ item.clip }}" data-filename="{{ item.filename }}">
+                    <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
+                        <div class="flex-1 min-w-0">
+                            <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
+                            {% if item.kind != 'exact' %}<span class="ml-2 text-xs font-medium text-gray-400">{{ kinds[item.kind] }}</span>{% endif %}
+                            <h3 class="text-xl font-bold text-gray-800">{{ item.song }}</h3>
+                        </div>
+                        <div class="w-full md:w-auto">
+                            <audio controls preload="none" class="w-full" src="{{ item.clip }}">
+                                Tu navegador no soporta audio.
+                            </audio>
+                        </div>
+                    </div>
+                    <p class="lyric text-gray-700 text-lg italic">
+                        {%- for word, marked, new_line in item.tokens -%}
+                            {%- if new_line %} <span class="text-gray-400">/</span>{% endif %}
+                            {% if marked %}<mark>{{ word }}</mark>{% else %}{{ word }}{% endif %}
+                        {%- endfor -%}
+                    </p>
+                    <div class="flex flex-wrap items-center gap-2">
+                        <button type="button" hidden
+                            class="share btn-celeste text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md">Compartir</button>
+                        <a download="{{ item.filename }}" href="{{ item.clip }}?name={{ item.filename | urlencode }}"
+                            class="download text-sm font-bold px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar</a>
+                        <span class="share-status text-xs text-gray-400" aria-live="polite"></span>
+                    </div>
+                    {% if item.others %}
+                    <div class="text-sm text-gray-500 flex flex-wrap items-center gap-2">
+                        <span>Todas las veces:</span>
+                        <button type="button" data-clip="{{ item.clip }}" aria-pressed="true"
+                            class="occurrence px-2 py-0.5 rounded-full border border-[#74ACDF] text-[#74ACDF] aria-pressed:bg-[#74ACDF] aria-pressed:text-white">{{ item.time }}</button>
+                        {% for o in item.others %}
+                        <button type="button" data-clip="{{ o.clip }}" aria-pressed="false"
+                            class="occurrence px-2 py-0.5 rounded-full border border-[#74ACDF] text-[#74ACDF] aria-pressed:bg-[#74ACDF] aria-pressed:text-white">{{ o.time }}</button>
+                        {% endfor %}
+                    </div>
+                    {% endif %}
+                </div>
+                {% endfor %}
+            {% elif searched %}
+                <div class="text-center py-10">
+                    <p class="text-gray-500 text-lg">"No lo soñé..." No se encontraron resultados.</p>
+                </div>
+            {% endif %}
+        </div>
+    </main>
+
+    <footer class="fixed bottom-0 w-full text-center py-4 bg-white bg-opacity-80 backdrop-blur-sm text-xs text-gray-400">
+        Así cualquiera 
+    </footer>
+
+    <script>
+    // Share (WhatsApp etc.) sends the mp3 itself through the system share sheet, where the
+    // browser can share files (Android Chrome, iOS Safari, Windows/macOS; needs HTTPS or localhost).
+    // iOS only allows sharing right after the tap, so each card's clip is downloaded beforehand.
+    const canShareFiles = !!(navigator.canShare &&
+        navigator.canShare({ files: [new File([''], 'x.mp3', { type: 'audio/mpeg' })] }));
+    const clipFiles = new Map(), clipFetches = new Map();     // url -> File / Promise<File>
+
+    function fetchClip(url, name) {
+        if (!clipFetches.has(url)) {
+            clipFetches.set(url, fetch(url)
+                .then(r => { if (!r.ok) throw new Error(r.status); return r.blob(); })
+                .then(blob => {
+                    const file = new File([blob], name, { type: 'audio/mpeg' });
+                    clipFiles.set(url, file);
+                    return file;
+                })
+                .catch(err => { clipFetches.delete(url); throw err; }));
+        }
+        return clipFetches.get(url);
+    }
+
+    function selectClip(card, url) {
+        card.dataset.clip = url;
+        card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
+        if (canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
+    }
+
+    document.querySelectorAll('.audio-card').forEach(card => {
+        if (!canShareFiles) return;
+        const button = card.querySelector('.share'), status = card.querySelector('.share-status');
+        button.hidden = false;
+        selectClip(card, card.dataset.clip);
+        button.addEventListener('click', async () => {
+            const url = card.dataset.clip;
+            status.textContent = '';
+            try {
+                // Already downloaded: share within the tap. Otherwise wait (iOS may then refuse).
+                const file = clipFiles.get(url) || await fetchClip(url, card.dataset.filename);
+                await navigator.share({ files: [file] });
+            } catch (err) {
+                if (err.name === 'AbortError') return;                     // closed the share sheet
+                if (err.name === 'NotAllowedError' && clipFiles.has(url)) {
+                    status.textContent = 'Listo, tocá Compartir de nuevo';
+                } else {
+                    status.textContent = 'No se pudo compartir, probá Descargar';
+                }
+            }
+        });
+    });
+
+    // Other occurrences: play that rendition in the card's player (and share/download it)
+    document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {
+        const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
+        card.querySelectorAll('.occurrence').forEach(b => b.setAttribute('aria-pressed', b === btn));
+        selectClip(card, btn.dataset.clip);
+        audio.src = btn.dataset.clip;
+        audio.play();
+    }));
+
+    // Suggestions while typing: lyric lines that complete the phrase
+    const input = document.getElementById('lyric'), list = document.getElementById('suggestions');
+    const form = document.getElementById('search-form');
+    let timer, active = -1, request = 0;
+
+    function close() { list.hidden = true; input.setAttribute('aria-expanded', 'false'); active = -1; }
+    function choose(text) { input.value = text; close(); form.submit(); }
+    function highlight(n) {
+        const items = list.querySelectorAll('li');
+        active = (n + items.length) % items.length;
+        items.forEach((li, k) => li.setAttribute('aria-selected', k === active));
+    }
+
+    input.addEventListener('input', () => {
+        clearTimeout(timer);
+        const q = input.value.trim();
+        if (q.length < 2) return close();
+        timer = setTimeout(async () => {
+            const mine = ++request;
+            const items = await (await fetch('/suggest?q=' + encodeURIComponent(q))).json();
+            if (mine !== request) return;          // an older answer arriving late
+            list.replaceChildren(...items.map(s => {
+                const li = document.createElement('li');
+                li.setAttribute('role', 'option');
+                li.className = 'px-6 py-2 cursor-pointer hover:bg-gray-50';
+                li.innerHTML = '<span class="text-gray-800"></span> <span class="text-xs text-gray-400"></span>';
+                li.children[0].textContent = s.text;
+                li.children[1].textContent = s.song;
+                li.addEventListener('mousedown', e => { e.preventDefault(); choose(s.text); });
+                return li;
+            }));
+            active = -1;
+            list.hidden = !items.length;
+            input.setAttribute('aria-expanded', String(!!items.length));
+        }, 150);
+    });
+    input.addEventListener('keydown', e => {
+        if (list.hidden) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            highlight(active + (e.key === 'ArrowDown' ? 1 : -1));
+        } else if (e.key === 'Enter' && active >= 0) {
+            e.preventDefault();
+            choose(list.querySelectorAll('li')[active].children[0].textContent);
+        } else if (e.key === 'Escape') {
+            close();
+        }
+    });
+    input.addEventListener('blur', close);
+    </script>
+
+</body>
+</html>

@@ -1,0 +1,7 @@
+# Only web/ code goes into the image (see Dockerfile)
+*
+!web/app.py
+!web/search.py
+!web/textnorm.py
+!web/requirements.txt
+!web/templates/

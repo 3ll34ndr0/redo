@@ -6,7 +6,7 @@ import re
 TOKEN = os.getenv("GENIUS_ACCESS_TOKEN")
 print(os.getenv("GENIUS_ACCESS_TOKEN"))
 ARTIST_NAME = "Patricio Rey y sus Redonditos de Ricota"
-OUTPUT_DIR = "./corpus"
+OUTPUT_DIR = "./text/corpus"   # private lyrics repo (see ../CLAUDE.md)
 
 if not os.path.exists(OUTPUT_DIR):
     os.makedirs(OUTPUT_DIR)

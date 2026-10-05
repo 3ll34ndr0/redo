@@ -1,0 +1,190 @@
+from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
+from flask_limiter import Limiter
+from contextlib import closing
+import sqlite3
+import re
+import subprocess
+import tempfile
+import threading
+import os
+
+from search import Index
+
+app = Flask(__name__)
+
+# Config
+DB_PATH = os.getenv("DB_PATH", "redondos.db")
+MUSIC_DIR = os.getenv("LIBRARY_PATH")
+SNIPPET_DIR = os.getenv("SNIPPET_CACHE_DIR") or os.path.join(app.static_folder, "snippets")
+MAX_RESULTS = 10
+MAX_CLIP_S = 60
+PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phrase
+CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
+CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
+MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
+
+
+def client_ip():
+    """The visitor's address. Behind Cloudflare + Traefik the connection comes from the
+    proxy, so use the header Cloudflare sets (CF-Connecting-IP), then X-Forwarded-For."""
+    forwarded = request.headers.get("X-Forwarded-For", "").split(",")[0].strip()
+    return request.headers.get("CF-Connecting-IP") or forwarded or request.remote_addr
+
+
+# Limits are per visitor, kept in memory: run ONE gunicorn worker (threads are fine).
+# Clips: a search page fetches up to 10 at once (Compartir pre-downloads them). The
+# application-wide clip limit holds even if someone fakes the IP headers.
+limiter = Limiter(client_ip, app=app, storage_uri="memory://")
+ffmpeg_slots = threading.BoundedSemaphore(MAX_FFMPEG)
+
+if not os.path.exists(SNIPPET_DIR):
+    os.makedirs(SNIPPET_DIR)
+
+# Search index over every sung word of every song (a few thousand rows), loaded
+# once and reloaded when the database file changes.
+_index = {"mtime": None, "index": None}
+
+
+def get_index():
+    mtime = os.path.getmtime(DB_PATH)
+    if _index["mtime"] != mtime:
+        # read-only: on the server the database sits on a read-only mount
+        with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
+            try:
+                rows = conn.execute("SELECT song, w, start, end, line, tok, orig FROM words ORDER BY song, i").fetchall()
+            except sqlite3.OperationalError:     # index built before line numbers: no lines shown
+                rows = conn.execute("SELECT song, w, start, end, NULL, i, w FROM words ORDER BY song, i").fetchall()
+        _index.update(mtime=mtime, index=Index(rows))
+    return _index["index"]
+
+
+def title(song):
+    return song.replace('_', ' ').title()
+
+
+def clock(seconds):
+    return f"{int(seconds) // 60}:{int(seconds) % 60:02d}"
+
+
+def file_name(song, tokens):
+    """'La Bestia Pop - A brillar mi amor.mp3': song + the highlighted words, safe for any OS."""
+    words = re.sub(r"[^\w\s'-]", "", " ".join(w for w, marked, _ in tokens if marked))
+    words = " ".join(words.split())[:60].strip()
+    return f"{title(song)} - {words}.mp3" if words else f"{title(song)}.mp3"
+
+
+def clip_url(song, start, end):
+    return url_for('clip', song=song, start_ms=int(start * 1000), end_ms=int(end * 1000))
+
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+
+@app.errorhandler(429)
+def too_many_requests(e):
+    return "Demasiadas búsquedas seguidas. Esperá un minuto y probá de nuevo.", 429
+
+
+@app.route('/search', methods=['GET', 'POST'])
+@limiter.limit("30/minute;300/hour")
+def search():
+    user_query = request.values.get('lyric', '').strip()
+    ix = get_index()
+    results = []
+    for hit in ix.search(user_query, MAX_RESULTS):
+        if not os.path.exists(os.path.join(MUSIC_DIR, f"{hit.song}.mp3")):
+            continue
+        tokens = ix.line_tokens(hit)
+        results.append({
+            'song': title(hit.song),
+            'kind': hit.kind,
+            'tokens': tokens,
+            'filename': file_name(hit.song, tokens),
+            'time': clock(hit.start),
+            'clip': clip_url(hit.song, hit.start, hit.end),
+            'others': [{'time': clock(o.start), 'clip': clip_url(o.song, o.start, o.end)} for o in hit.others],
+        })
+    exact = any(r['kind'] != 'approx' for r in results)     # 'partial' = what was typed, completed
+    return render_template('index.html', query=user_query, results=results, exact=exact, searched=True)
+
+
+@app.route('/suggest')
+@limiter.limit("120/minute")
+def suggest():
+    return jsonify([{'text': text, 'song': title(song)} for text, song in get_index().suggest(request.args.get('q', ''))])
+
+
+def prune_cache():
+    """Delete the oldest clips while the cache is over CACHE_MB (to 80% of it)."""
+    files = []
+    for entry in os.scandir(SNIPPET_DIR):
+        if entry.is_file():
+            st = entry.stat()
+            files.append((st.st_mtime, st.st_size, entry.path))
+    total = sum(size for _, size, _ in files)
+    if total <= CACHE_MB * 2**20:
+        return
+    for _, size, path in sorted(files):
+        if total <= CACHE_MB * 2**20 * 0.8:
+            break
+        try:
+            os.remove(path)
+            total -= size
+        except OSError:
+            pass
+
+
+_cuts = {"n": 0}
+
+
+@app.route('/clip/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def clip(song, start_ms, end_ms):
+    """The sung phrase from start to end (ms) plus padding, cut on first request and cached.
+
+    ?name=<file name> sends it as a download with that name (Descargar button).
+    """
+    if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
+        abort(404)
+    start, end = start_ms / 1000, end_ms / 1000
+    # File name includes the exact timing (ms), so a rebuilt index never serves stale clips
+    output_path = os.path.join(SNIPPET_DIR, f"{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
+    input_path = os.path.join(MUSIC_DIR, f"{song}.mp3")
+    if not os.path.exists(output_path):
+        if not os.path.exists(input_path):
+            abort(404)
+        # Fast clip with FFmpeg, into a temporary file: concurrent requests never see a half-written clip
+        with ffmpeg_slots:
+            fd, tmp_path = tempfile.mkstemp(suffix='.mp3', dir=SNIPPET_DIR)
+            os.close(fd)
+            try:
+                result = subprocess.run([
+                    'ffmpeg', '-y', '-ss', str(max(0, start - PAD_BEFORE)), '-to', str(end + PAD_AFTER),
+                    '-i', input_path, '-c', 'copy', tmp_path
+                ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=30)
+                ok = result.returncode == 0
+            except subprocess.TimeoutExpired:
+                ok = False
+            if ok:
+                os.replace(tmp_path, output_path)
+            else:
+                os.remove(tmp_path)
+        _cuts["n"] += 1
+        if _cuts["n"] % 50 == 0:
+            prune_cache()
+    if not os.path.exists(output_path):
+        abort(500)
+    # The URL holds the exact timing, so a clip never changes: browsers and Cloudflare may keep it
+    name = os.path.basename(request.args.get('name', ''))
+    if name:
+        return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
+    return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
+
+
+if __name__ == "__main__":
+    # Local development only (the container runs gunicorn). FLASK_DEBUG=1 turns on the
+    # debugger, which lets anyone who can reach the page run code: never on a public server.
+    app.run(host='0.0.0.0', port=5000, debug=os.getenv("FLASK_DEBUG") == "1")

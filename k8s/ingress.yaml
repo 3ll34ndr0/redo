@@ -1,0 +1,21 @@
+# HTTPS is Cloudflare's (proxied DNS record, like t.marso.ar); Cloudflare → Traefik is HTTP.
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: extractos
+  namespace: extractos
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: extractos.marso.ar
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: extractos
+                port:
+                  number: 5000
