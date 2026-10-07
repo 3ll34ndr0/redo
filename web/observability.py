@@ -44,6 +44,17 @@ INDEX_WORDS = Gauge("extractos_index_words", "Sung words in the search index")
 INDEX_LOADED = Gauge("extractos_index_loaded_timestamp_seconds", "When the search database was last (re)loaded")
 
 
+# Every known label combination starts at 0, so the first search/clip/share after a start is
+# counted too (Prometheus' increase() can't see the jump of a series that appears at 1).
+for _outcome in ("exact", "partial", "approx", "none"):
+    SEARCHES.labels(_outcome)
+for _result in ("cached", "cut", "failed"):
+    for _kind in ("play", "download"):
+        CLIPS.labels(_result, _kind)
+for _result in ("shared", "cancelled", "failed"):
+    SHARES.labels(_result)
+
+
 def dir_bytes(path):
     try:
         return sum(e.stat().st_size for e in os.scandir(path) if e.is_file())
