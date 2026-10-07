@@ -37,9 +37,9 @@ spec:
           env:
             - name: OTEL_SERVICE_NAME
               value: extractos
-            # Traces are sent only once this is set (the collector, e.g. Grafana Alloy):
-            # - name: OTEL_EXPORTER_OTLP_ENDPOINT
-            #   value: http://alloy.monitoring:4318
+            # Traces → Grafana Alloy's OTLP receiver (k3s-cluster repo, monitoring/) → Grafana Cloud
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: http://grafana-cloud-otel-receiver.monitoring.svc:4318
             - name: SNIPPET_CACHE_MB      # app deletes the oldest clips above this
               value: "300"
           securityContext:

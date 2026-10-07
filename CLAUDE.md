@@ -95,6 +95,7 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   429s, shares reported by the page via POST `/event`, cache size, index size); one JSON log line per
   request/search/clip/share/error on stdout with `trace_id`, no visitor IPs; OpenTelemetry traces
   (request → `search` / `index.load` / `clip.ffmpeg`) sent only if `OTEL_EXPORTER_OTLP_ENDPOINT` is set
-  (commented out in `k8s/deployment.yaml` until a collector exists). Probes use `/healthz` (not logged).
-  No collector yet: plan is Grafana Alloy → Grafana Cloud free (the Grafana MCP here is the user's WORK one).
+  (`k8s/deployment.yaml`: Alloy's receiver). Probes use `/healthz` (not logged).
+  Collected by Grafana Alloy → Grafana Cloud https://leandro.grafana.net (setup and the Fleet pipeline
+  in ~/Documentos/k3s-cluster, README "Monitoring"). The Grafana MCP in Claude Code is the user's WORK one, not this.
 - Ideas: measure line ends (few labels have ends).
