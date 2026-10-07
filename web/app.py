@@ -88,6 +88,14 @@ def clip_url(song, start, end):
     return url_for('clip', song=song, start_ms=int(start * 1000), end_ms=int(end * 1000))
 
 
+# Load the search index now, while the pod starts (the startup probe waits for it), so
+# /healthz and the first search don't pay for it: ~1 s with the pod's CPU limit.
+try:
+    get_index()
+except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
+    obs.log("index_load_failed", level="error", error=repr(e))
+
+
 @app.route('/')
 def index():
     return render_template('index.html')

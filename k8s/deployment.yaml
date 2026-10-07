@@ -58,16 +58,27 @@ spec:
               mountPath: /cache
             - name: tmp
               mountPath: /tmp
+          # Starting takes ~10 s with the CPU limit (imports + search index): the startup
+          # probe allows up to 60 s; liveness/readiness only begin once it has passed.
+          startupProbe:
+            httpGet:
+              path: /healthz
+              port: 5000
+            periodSeconds: 2
+            timeoutSeconds: 3
+            failureThreshold: 30
           readinessProbe:
             httpGet:
               path: /healthz
               port: 5000
             periodSeconds: 10
+            timeoutSeconds: 3
           livenessProbe:
             httpGet:
               path: /healthz
               port: 5000
             periodSeconds: 30
+            timeoutSeconds: 3
             failureThreshold: 3
           resources:
             requests:
