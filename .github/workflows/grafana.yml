@@ -63,8 +63,11 @@ jobs:
         run: |
           bucket=opentofu-states
           key="redo/lock-probe-${GITHUB_RUN_ID}"
-          echo "endpoint: ${AWS_ENDPOINT_URL_S3:-<CONTABO_S3_ENDPOINT variable not set>}"
+          # annotations keep only one line: flatten the AWS CLI's multi-line errors
+          one_line() { tr '\n' ' ' <<<"$1" | tr -s ' '; }
+          echo "::notice::endpoint: ${AWS_ENDPOINT_URL_S3:-<CONTABO_S3_ENDPOINT variable not set>}"
           if ! out=$(aws s3api put-object --bucket "$bucket" --key "$key" 2>&1); then
+            out=$(one_line "$out")
             echo "::error::cannot write to bucket $bucket: $out"
             exit 1
           fi
@@ -73,7 +76,7 @@ jobs:
           elif grep -q PreconditionFailed <<<"$out"; then
             echo "::notice::state locking supported"
           else
-            echo "::warning::conditional writes not supported, OpenTofu's lock will fail: $out"
+            echo "::warning::conditional writes not supported, OpenTofu's lock will fail: $(one_line "$out")"
           fi
           aws s3api delete-object --bucket "$bucket" --key "$key" >/dev/null
 
