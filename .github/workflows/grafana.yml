@@ -48,7 +48,7 @@ jobs:
       run:
         working-directory: monitoring/tofu
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Dashboard JSON matches make_dashboard.py
         working-directory: monitoring
@@ -58,18 +58,24 @@ jobs:
             || { echo "::error::extractos-dashboard.json is stale: run python3 monitoring/make_dashboard.py and commit"; exit 1; }
 
       # OpenTofu's lock (use_lockfile) needs conditional writes: a second "create only if
-      # missing" upload of the same object must be refused (412). Just a warning if not.
-      - name: Check the bucket supports state locking
+      # missing" upload of the same object must be refused (412 PreconditionFailed).
+      - name: Check the bucket (access, and support for state locking)
         run: |
+          bucket=opentofu-states
           key="redo/lock-probe-${GITHUB_RUN_ID}"
-          put() { aws s3api put-object --bucket opentofu-states --key "$key" --if-none-match '*' >/dev/null 2>&1; }
-          put || { echo "::error::cannot write to bucket opentofu-states (credentials, endpoint or bucket name)"; exit 1; }
-          if put; then
-            echo "::warning::the bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)"
-          else
-            echo "state locking supported"
+          echo "endpoint: ${AWS_ENDPOINT_URL_S3:-<CONTABO_S3_ENDPOINT variable not set>}"
+          if ! out=$(aws s3api put-object --bucket "$bucket" --key "$key" 2>&1); then
+            echo "::error::cannot write to bucket $bucket: $out"
+            exit 1
           fi
-          aws s3api delete-object --bucket opentofu-states --key "$key" >/dev/null
+          if out=$(aws s3api put-object --bucket "$bucket" --key "$key" --if-none-match '*' 2>&1); then
+            echo "::warning::bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)"
+          elif grep -q PreconditionFailed <<<"$out"; then
+            echo "::notice::state locking supported"
+          else
+            echo "::warning::conditional writes not supported, OpenTofu's lock will fail: $out"
+          fi
+          aws s3api delete-object --bucket "$bucket" --key "$key" >/dev/null
 
       - uses: opentofu/setup-opentofu@v2
         with:
