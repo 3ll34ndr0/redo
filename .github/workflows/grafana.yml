@@ -1,0 +1,86 @@
+name: Grafana dashboard (OpenTofu)
+
+# monitoring/tofu manages the Extractos folder + dashboard in Grafana Cloud (leandro.grafana.net).
+# PR: plan only. Push to main: apply. State: Contabo Object Storage bucket opentofu-states
+# (encrypted, locked).
+# Secrets: GRAFANA_SA_TOKEN (service account token, Editor), TOFU_STATE_PASSPHRASE,
+#          CONTABO_S3_ACCESS_KEY_ID, CONTABO_S3_SECRET_ACCESS_KEY.
+# Repo variables: CONTABO_S3_ENDPOINT (e.g. https://usa1.contabostorage.com);
+#          optional GRAFANA_PROM_DS / GRAFANA_LOKI_DS (data source names, if not the defaults).
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "monitoring/**"
+      - ".github/workflows/grafana.yml"
+  pull_request:
+    paths:
+      - "monitoring/**"
+      - ".github/workflows/grafana.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# One run at a time (the state is also locked in the bucket, if the storage supports it)
+concurrency:
+  group: grafana-tofu
+  cancel-in-progress: false
+
+env:
+  TF_VAR_grafana_token: ${{ secrets.GRAFANA_SA_TOKEN }}
+  TF_VAR_state_passphrase: ${{ secrets.TOFU_STATE_PASSPHRASE }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.CONTABO_S3_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.CONTABO_S3_SECRET_ACCESS_KEY }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.CONTABO_S3_ENDPOINT }}
+  AWS_DEFAULT_REGION: us-east-1
+  TF_VAR_prometheus_data_source: ${{ vars.GRAFANA_PROM_DS || 'grafanacloud-leandro-prom' }}
+  TF_VAR_loki_data_source: ${{ vars.GRAFANA_LOKI_DS || 'grafanacloud-leandro-logs' }}
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  tofu:
+    # PRs from forks get no secrets: nothing to do there
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: monitoring/tofu
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Dashboard JSON matches make_dashboard.py
+        working-directory: monitoring
+        run: |
+          python3 make_dashboard.py
+          git diff --exit-code extractos-dashboard.json \
+            || { echo "::error::extractos-dashboard.json is stale: run python3 monitoring/make_dashboard.py and commit"; exit 1; }
+
+      # OpenTofu's lock (use_lockfile) needs conditional writes: a second "create only if
+      # missing" upload of the same object must be refused (412). Just a warning if not.
+      - name: Check the bucket supports state locking
+        run: |
+          key="redo/lock-probe-${GITHUB_RUN_ID}"
+          put() { aws s3api put-object --bucket opentofu-states --key "$key" --if-none-match '*' >/dev/null 2>&1; }
+          put || { echo "::error::cannot write to bucket opentofu-states (credentials, endpoint or bucket name)"; exit 1; }
+          if put; then
+            echo "::warning::the bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)"
+          else
+            echo "state locking supported"
+          fi
+          aws s3api delete-object --bucket opentofu-states --key "$key" >/dev/null
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - run: tofu init -input=false
+      - run: tofu validate
+      - run: tofu plan -input=false -out=dashboard.tfplan
+
+      - name: Apply
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: tofu apply -input=false dashboard.tfplan
+

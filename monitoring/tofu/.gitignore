@@ -1,0 +1,5 @@
+# provider downloads and plan files (the state is in Contabo Object Storage)
+.terraform/
+*.tfplan
+*.tfstate
+*.tfstate.backup
