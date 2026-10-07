@@ -58,27 +58,28 @@ jobs:
             || { echo "::error::extractos-dashboard.json is stale: run python3 monitoring/make_dashboard.py and commit"; exit 1; }
 
       # OpenTofu's lock (use_lockfile) needs conditional writes: a second "create only if
-      # missing" upload of the same object must be refused (412 PreconditionFailed).
+      # missing" upload of the same object must be refused (412). curl signs the S3 requests
+      # (SigV4) and shows the raw HTTP status; the AWS CLI crashed on Contabo's answer.
       - name: Check the bucket (access, and support for state locking)
         run: |
           bucket=opentofu-states
           key="redo/lock-probe-${GITHUB_RUN_ID}"
-          # annotations keep only one line: flatten the AWS CLI's multi-line errors
-          one_line() { tr '\n' ' ' <<<"$1" | tr -s ' '; }
+          url="${AWS_ENDPOINT_URL_S3%/}/$bucket/$key"
+          s3() { curl -s -o /dev/null -w '%{http_code}' --aws-sigv4 "aws:amz:${AWS_DEFAULT_REGION}:s3" \
+                   --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "$@" "$url"; }
           echo "::notice::endpoint: ${AWS_ENDPOINT_URL_S3:-<CONTABO_S3_ENDPOINT variable not set>}"
-          if ! out=$(aws s3api put-object --bucket "$bucket" --key "$key" 2>&1); then
-            out=$(one_line "$out")
-            echo "::error::cannot write to bucket $bucket: $out"
+          code=$(s3 -X PUT --data probe)
+          if [ "$code" != 200 ]; then
+            echo "::error::cannot write to bucket $bucket: HTTP $code (credentials, endpoint or bucket name)"
             exit 1
           fi
-          if out=$(aws s3api put-object --bucket "$bucket" --key "$key" --if-none-match '*' 2>&1); then
-            echo "::warning::bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)"
-          elif grep -q PreconditionFailed <<<"$out"; then
-            echo "::notice::state locking supported"
-          else
-            echo "::warning::conditional writes not supported, OpenTofu's lock will fail: $(one_line "$out")"
-          fi
-          aws s3api delete-object --bucket "$bucket" --key "$key" >/dev/null
+          code=$(s3 -X PUT -H 'If-None-Match: *' --data probe)
+          case "$code" in
+            412) echo "::notice::state locking supported (conditional write refused: HTTP 412)" ;;
+            200) echo "::warning::the bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)" ;;
+            *)   echo "::warning::conditional writes not supported (HTTP $code): OpenTofu's state lock may fail" ;;
+          esac
+          s3 -X DELETE >/dev/null
 
       - uses: opentofu/setup-opentofu@v2
         with:
