@@ -1,47 +1,103 @@
-name: Build and deploy
+name: Build, test and deploy
+
+# unit tests → build the image → smoke test it → security scan → (main only) push it and
+# point k8s/deployment.yaml at it, which Argo CD deploys. Any failing test stops the
+# chain: nothing is pushed or deployed. Pull requests run the tests only.
 
 on:
   push:
     branches: [main]
-    paths:
+    paths: &app-paths
       - "web/app.py"
       - "web/search.py"
       - "web/textnorm.py"
       - "web/observability.py"
       - "web/requirements.txt"
       - "web/templates/**"
+      - "web/tests/**"
       - "Dockerfile"
       - ".dockerignore"
       - "k8s/deployment.yaml"
       - ".github/workflows/deploy.yml"
+  pull_request:
+    paths: *app-paths
 
 permissions:
-  contents: write
-  packages: write
+  contents: read
+
+# deploys one at a time, in order
+concurrency:
+  group: deploy-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
-  build-and-update-manifest:
+  unit-tests:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
 
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"        # same as the image (python:3.12-slim)
+          cache: pip
+          cache-dependency-path: web/requirements.txt
+
+      - run: pip install -r web/requirements.txt pytest==9.1.1
+
+      # made-up data only (web/tests/fixture.py): the repo is public, no real lyrics or songs
+      - run: python -m pytest tests -q
+        working-directory: web
+
+  image:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                   # commit the new image tag into k8s/deployment.yaml
+      packages: write                   # push to ghcr.io
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build image
+        run: docker build -t "$IMAGE" .
+
+      # runs it like Kubernetes does (read-only, non-root, data mounted read-only)
+      - name: Smoke test the image
+        run: python3 web/tests/smoke_test.py "$IMAGE"
+
+      # report only for now: fixable HIGH/CRITICAL vulnerabilities, in the job summary
+      - name: Security scan (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          severity: HIGH,CRITICAL
+          ignore-unfixed: true
+          format: table
+          output: trivy.txt
+          exit-code: "0"
+
+      - name: Scan report in the job summary
+        run: |
+          { echo "### Trivy: fixable HIGH/CRITICAL vulnerabilities"; echo '```'; cat trivy.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
+
       - name: Log in to GHCR
+        if: github.event_name == 'push'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push image
-        uses: docker/build-push-action@v5
-        with:
-          context: .
-          push: true
-          tags: ghcr.io/${{ github.repository }}:${{ github.sha }}
+      # the image that passed the tests is the one pushed (same build)
+      - name: Push image
+        if: github.event_name == 'push'
+        run: docker push "$IMAGE"
 
       - name: Update deployment manifest
+        if: github.event_name == 'push'
         run: |
-          sed -i "s|image: ghcr.io/.*/redo:.*|image: ghcr.io/${{ github.repository }}:${{ github.sha }}|" k8s/deployment.yaml
+          sed -i "s|image: ghcr.io/.*/redo:.*|image: $IMAGE|" k8s/deployment.yaml
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add k8s/deployment.yaml

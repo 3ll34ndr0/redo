@@ -81,6 +81,12 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
 - Push to `main` touching web code/Dockerfile/`k8s/deployment.yaml` → `.github/workflows/deploy.yml` builds
   `ghcr.io/3ll34ndr0/redo:<sha>`, commits the tag into `k8s/deployment.yaml` → Argo CD app
   `extractos` (`argocd-application.yaml`, applied once by hand) syncs `k8s/` (namespace `extractos`).
+- CI (`.github/workflows/deploy.yml`): unit tests (`web/tests`, pytest) → build image → smoke test
+  (`web/tests/smoke_test.py <image>`: runs it read-only/non-root, checks pages, clip duration, metrics,
+  JSON logs) → Trivy scan (report only, fixable HIGH/CRITICAL, job summary) → on main: push + manifest.
+  PRs run the tests only. Tests use MADE-UP data (`web/tests/fixture.py`): never real lyrics or audio
+  (public repo). Run locally: `cd web && ../venv/bin/python -m pytest tests -q`;
+  `docker build -t extractos:test . && python3 web/tests/smoke_test.py extractos:test`.
 - Image = code + standalone ffmpeg only (~400 MB). Songs + DB are NOT in the image: VPS folder
   `/srv/extractos/{music/,redondos.db}` (hostPath, read-only), copied with
   `rsync -av --chmod=D755,F644 lyrics/music_128/ vps:/srv/extractos/music/` and `rsync -av web/redondos.db vps:/srv/extractos/`.
