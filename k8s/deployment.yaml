@@ -13,6 +13,12 @@ spec:
     metadata:
       labels:
         app: extractos
+      annotations:
+        # metrics on port 9100 (/metrics), for a Prometheus or Grafana Alloy scraping the cluster
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "9100"
+        k8s.grafana.com/scrape: "true"
+        k8s.grafana.com/metrics.portNumber: "9100"
     spec:
       securityContext:
         runAsNonRoot: true
@@ -24,8 +30,16 @@ spec:
           image: ghcr.io/3ll34ndr0/redo:bc98532be60eb5fe73f1170730c556ce6c335c66
           imagePullPolicy: IfNotPresent
           ports:
-            - containerPort: 5000
+            - name: http
+              containerPort: 5000
+            - name: metrics
+              containerPort: 9100
           env:
+            - name: OTEL_SERVICE_NAME
+              value: extractos
+            # Traces are sent only once this is set (the collector, e.g. Grafana Alloy):
+            # - name: OTEL_EXPORTER_OTLP_ENDPOINT
+            #   value: http://alloy.monitoring:4318
             - name: SNIPPET_CACHE_MB      # app deletes the oldest clips above this
               value: "300"
           securityContext:
@@ -46,12 +60,12 @@ spec:
               mountPath: /tmp
           readinessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: 5000
             periodSeconds: 10
           livenessProbe:
             httpGet:
-              path: /
+              path: /healthz
               port: 5000
             periodSeconds: 30
             failureThreshold: 3

@@ -9,7 +9,7 @@ WORKDIR /app
 COPY web/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY web/app.py web/search.py web/textnorm.py ./
+COPY web/app.py web/search.py web/textnorm.py web/observability.py ./
 COPY web/templates/ templates/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -20,7 +20,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 
 RUN useradd --uid 10001 --no-create-home app
 USER 10001
-EXPOSE 5000
-# ONE worker: rate limits and the search index live in that process's memory.
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "60", \
-     "--access-logfile", "-", "app:app"]
+# 5000: the site; 9100: Prometheus metrics (cluster-internal, never on the Ingress)
+EXPOSE 5000 9100
+# ONE worker: rate limits, metrics and the search index live in that process's memory.
+# No gunicorn access log: the app writes one JSON line per request (observability.py).
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "1", "--threads", "8", "--timeout", "60", "app:app"]

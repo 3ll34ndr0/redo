@@ -122,6 +122,12 @@
         return clipFetches.get(url);
     }
 
+    // Tell the server how sharing went (for the stats: only the page knows)
+    function report(card, result) {
+        const body = JSON.stringify({ type: 'share', result, song: card.querySelector('h3').textContent });
+        try { navigator.sendBeacon('/event', new Blob([body], { type: 'application/json' })); } catch (e) {}
+    }
+
     function selectClip(card, url) {
         card.dataset.clip = url;
         card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
@@ -140,8 +146,10 @@
                 // Already downloaded: share within the tap. Otherwise wait (iOS may then refuse).
                 const file = clipFiles.get(url) || await fetchClip(url, card.dataset.filename);
                 await navigator.share({ files: [file] });
+                report(card, 'shared');
             } catch (err) {
-                if (err.name === 'AbortError') return;                     // closed the share sheet
+                if (err.name === 'AbortError') return report(card, 'cancelled');   // closed the share sheet
+                report(card, 'failed');
                 if (err.name === 'NotAllowedError' && clipFiles.has(url)) {
                     status.textContent = 'Listo, tocá Compartir de nuevo';
                 } else {

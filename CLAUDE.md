@@ -90,4 +90,11 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
 - gunicorn 1 worker × 8 threads, 1 replica: rate limits (Flask-Limiter, per `CF-Connecting-IP`) and the
   index are in memory. Limits: search 30/min, suggest 120/min, clip 60/min per IP + 600/min total;
   2 ffmpeg at once; clip cache (emptyDir) pruned above 300 MB.
+- **Observability** (`web/observability.py`): Prometheus metrics on port 9100 (`extractos_*`: requests,
+  searches by outcome exact/partial/approx/none, clips cut/cached/failed × play/download, ffmpeg time,
+  429s, shares reported by the page via POST `/event`, cache size, index size); one JSON log line per
+  request/search/clip/share/error on stdout with `trace_id`, no visitor IPs; OpenTelemetry traces
+  (request → `search` / `index.load` / `clip.ffmpeg`) sent only if `OTEL_EXPORTER_OTLP_ENDPOINT` is set
+  (commented out in `k8s/deployment.yaml` until a collector exists). Probes use `/healthz` (not logged).
+  No collector yet: plan is Grafana Alloy → Grafana Cloud free (the Grafana MCP here is the user's WORK one).
 - Ideas: measure line ends (few labels have ends).
