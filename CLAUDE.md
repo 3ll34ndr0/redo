@@ -87,6 +87,11 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   PRs run the tests only. Tests use MADE-UP data (`web/tests/fixture.py`): never real lyrics or audio
   (public repo). Run locally: `cd web && ../venv/bin/python -m pytest tests -q`;
   `docker build -t extractos:test . && python3 web/tests/smoke_test.py extractos:test`.
+- **Argo CD does NOT auto-sync (2026-10-08): deploys are MANUAL.** After CI's bot commit "Deploy <sha>"
+  lands on main, the user syncs `extractos` by hand in Argo CD. The controller (v3.3.7, default settings)
+  only checks apps when woken (start-up, manual sync); its 2-minute periodic refresh never fires, also
+  after a restart. User's choice: keep syncing manually. Options if revisited: GitHub webhook to
+  https://argocd.marso.ar/api/webhook, or upgrading Argo CD.
 - Image = code + standalone ffmpeg only (~400 MB). Songs + DB are NOT in the image: VPS folder
   `/srv/extractos/{music/,redondos.db}` (hostPath, read-only), copied with
   `rsync -av --chmod=D755,F644 lyrics/music_128/ vps:/srv/extractos/music/` and `rsync -av web/redondos.db vps:/srv/extractos/`.
