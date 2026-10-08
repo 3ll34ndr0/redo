@@ -4,5 +4,6 @@
 !web/search.py
 !web/textnorm.py
 !web/observability.py
+!web/reports.py
 !web/requirements.txt
 !web/templates/

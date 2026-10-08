@@ -104,3 +104,64 @@ def test_logs_are_json(client, capsys):
     search = [l for l in lines if l["event"] == "search"][-1]
     assert search["query"] == "la luna sa" and search["outcome"] == "partial"
     assert not any("ip" in key.lower() for l in lines for key in l)    # no visitor addresses
+
+
+# --- clip reports (¿No coincide?)
+
+def post_report(client, **fields):
+    body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late"}
+    body.update(fields)
+    body = {k: v for k, v in body.items() if v is not None}
+    return client.post("/report", data=json.dumps(body), content_type="application/json")
+
+
+def test_report_is_stored(client):
+    before = metric("extractos_clip_reports_total", problem="starts_late")
+    r = post_report(client, fixed_start_ms=4600, fixed_end_ms=7200, query="vamos a brillar",
+                    line="Vamos a brillar esta noche")
+    assert r.status_code == 201
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert stored["song"] == "cancion_de_prueba" and stored["problem"] == "starts_late"
+    assert (stored["start_ms"], stored["end_ms"], stored["fixed_start_ms"], stored["fixed_end_ms"]) == (5000, 7000, 4600, 7200)
+    assert stored["line"] == "Vamos a brillar esta noche" and stored["db_version"]
+    assert metric("extractos_clip_reports_total", problem="starts_late") == before + 1
+
+
+def test_report_without_adjustment(client):
+    r = post_report(client, problem="wrong_phrase")
+    assert r.status_code == 201
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert stored["fixed_start_ms"] is None and stored["fixed_end_ms"] is None
+
+
+@pytest.mark.parametrize("fields", [
+    {"song": "no_such_song"},
+    {"problem": "too_loud"},
+    {"start_ms": 7000, "end_ms": 5000},                  # end before start
+    {"start_ms": 0, "end_ms": 61000},                    # longer than 60 s
+    {"start_ms": "5000"},                                # not an integer
+    {"start_ms": -1},
+    {"start_ms": True},
+    {"fixed_start_ms": 4000},                            # fixed times go together
+    {"fixed_start_ms": 9000, "fixed_end_ms": 8000},
+])
+def test_bad_reports_are_refused(client, fields):
+    count = len(app_module.reports.all())
+    assert post_report(client, **fields).status_code == 400
+    assert len(app_module.reports.all()) == count       # nothing stored
+
+
+def test_report_text_is_cut(client):
+    r = post_report(client, query="x" * 1000, line="y" * 1000)
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert len(stored["query"]) == 200 and len(stored["line"]) == 200
+
+
+def test_report_not_json(client):
+    assert client.post("/report", data="nope").status_code == 400
+    assert client.post("/report", data="[1, 2]", content_type="application/json").status_code == 400
+
+
+def test_card_has_the_report_panel(client):
+    page = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
+    assert "¿No coincide?" in page and 'value="starts_late"' in page and "Escuchar el ajuste" in page

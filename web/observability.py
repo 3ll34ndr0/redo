@@ -36,6 +36,8 @@ FFMPEG_SECONDS = Histogram("extractos_ffmpeg_duration_seconds", "Time ffmpeg tak
                            buckets=(.025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30))
 FFMPEG_ACTIVE = Gauge("extractos_ffmpeg_in_progress", "Clips being cut or waiting for an ffmpeg slot")
 RATE_LIMITED = Counter("extractos_rate_limited_total", "Requests refused by the rate limits", ["route"])
+CLIP_REPORTS = Counter("extractos_clip_reports_total", "Clips reported as not matching (¿No coincide?), by problem",
+                       ["problem"])
 SHARES = Counter("extractos_shares_total", "Compartir button outcomes reported by the page: shared, cancelled, failed",
                  ["result"])
 CACHE_BYTES = Gauge("extractos_clip_cache_bytes", "Size of the clip cache")
@@ -53,6 +55,8 @@ for _result in ("cached", "cut", "failed"):
         CLIPS.labels(_result, _kind)
 for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)
+for _problem in ("starts_late", "starts_early", "ends_early", "wrong_phrase"):
+    CLIP_REPORTS.labels(_problem)
 
 
 def dir_bytes(path):

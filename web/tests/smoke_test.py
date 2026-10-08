@@ -81,6 +81,7 @@ def main():
 
     docker("rm", "-f", NAME)
     r = docker("run", "-d", "--name", NAME, "--read-only", "--tmpfs", "/cache", "--tmpfs", "/tmp",
+               "--tmpfs", "/reports:uid=10001,gid=10001", "-e", "REPORTS_DB=/reports/reports.db",
                "--cap-drop", "ALL", "--security-opt", "no-new-privileges",
                "-p", "127.0.0.1:5055:5000", "-p", "127.0.0.1:9155:9100", "-v", f"{data}:/data:ro", IMAGE)
     if r.returncode != 0:
@@ -104,7 +105,10 @@ def run_checks(work):
         except (urllib.error.URLError, ConnectionError, OSError):
             pass
         time.sleep(0.5)
-    status, _, body = get(WEB + "/healthz")
+    try:
+        status, _, body = get(WEB + "/healthz")
+    except (urllib.error.URLError, ConnectionError, OSError) as e:     # never started (logs printed below)
+        status, body = None, str(e).encode()
     check("starts and answers /healthz", status == 200 and body == b"ok", f"{status} {body[:80]!r}")
     if status != 200:
         return
@@ -138,6 +142,11 @@ def run_checks(work):
     check("share event accepted", get(WEB + "/event", b'{"type":"share","result":"shared"}',
                                       {"Content-Type": "application/json"})[0] == 204)
     check("/metrics is not on the public port", get(WEB + "/metrics")[0] == 404)
+    status, _, body = get(WEB + "/report", json.dumps({
+        "song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late",
+        "fixed_start_ms": 4800, "fixed_end_ms": 7000}).encode(), {"Content-Type": "application/json"})
+    check("clip report stored", status == 201 and "id" in json.loads(body or b"{}"), f"{status} {body[:100]!r}")
+    check("bad clip report refused", get(WEB + "/report", b'{"song": "x"}', {"Content-Type": "application/json"})[0] == 400)
 
     status, _, body = get(METRICS + "/metrics")
     text = body.decode()
@@ -146,6 +155,7 @@ def run_checks(work):
     check("metrics count the search", (sample('extractos_searches_total{outcome="exact"}') or 0) >= 1)
     check("metrics count the clip cut", (sample('extractos_clips_total{kind="play",result="cut"}') or 0) >= 1)
     check("metrics count the share", (sample('extractos_shares_total{result="shared"}') or 0) >= 1)
+    check("metrics count the report", (sample('extractos_clip_reports_total{problem="starts_late"}') or 0) >= 1)
     check("metrics see the index", sample("extractos_index_songs") == len(fixture.SONGS))
 
     logs = docker("logs", NAME).stdout.splitlines()

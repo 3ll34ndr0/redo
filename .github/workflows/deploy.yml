@@ -12,12 +12,14 @@ on:
       - "web/search.py"
       - "web/textnorm.py"
       - "web/observability.py"
+      - "web/reports.py"
       - "web/requirements.txt"
       - "web/templates/**"
       - "web/tests/**"
       - "Dockerfile"
       - ".dockerignore"
       - "k8s/deployment.yaml"
+      - "k8s/reports-pvc.yaml"
       - ".github/workflows/deploy.yml"
   pull_request:
     paths: *app-paths

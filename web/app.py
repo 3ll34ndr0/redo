@@ -10,6 +10,7 @@ import time
 import os
 
 import observability as obs
+from reports import PROBLEMS, ReportStore
 from search import Index
 
 app = Flask(__name__)
@@ -22,6 +23,7 @@ MAX_RESULTS = 10
 MAX_CLIP_S = 60
 PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phrase
 CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
+REPORTS_DB = os.getenv("REPORTS_DB", "reports.db")     # clip reports (writable; see reports.py)
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
 
@@ -94,6 +96,14 @@ try:
     get_index()
 except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
     obs.log("index_load_failed", level="error", error=repr(e))
+
+
+# Clip reports need a writable place; without one the site still works, /report answers 503.
+try:
+    reports = ReportStore(REPORTS_DB)
+except sqlite3.Error as e:
+    reports = None
+    obs.log("reports_unavailable", level="error", path=REPORTS_DB, error=repr(e))
 
 
 @app.route('/')
@@ -253,6 +263,56 @@ def event():
     obs.SHARES.labels(data['result']).inc()
     obs.log("share", result=data['result'], song=str(data.get('song', ''))[:100] or None)
     return '', 204
+
+
+def _ms(value, name):
+    """A time in ms from the request: an int ≥ 0 (or abort 400)."""
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        abort(400, f"{name}: integer milliseconds expected")
+    return value
+
+
+def _clip_range(start_ms, end_ms, name):
+    if not start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
+        abort(400, f"{name}: start must be before end, at most {MAX_CLIP_S} s apart")
+
+
+@app.route('/report', methods=['POST'])
+@limiter.limit("10/minute;50/day")
+def report():
+    """A visitor says a clip doesn't match (the ¿No coincide? panel of a card).
+
+    {"song", "start_ms", "end_ms": the clip as served; "problem": one of reports.PROBLEMS;
+     "fixed_start_ms", "fixed_end_ms": optional adjustment; "query", "line": context}
+    """
+    if reports is None:
+        abort(503)
+    data = request.get_json(silent=True, force=True)
+    if not isinstance(data, dict):
+        abort(400, "JSON object expected")
+    song = data.get('song')
+    if song not in get_index().songs:
+        abort(400, "unknown song")
+    if data.get('problem') not in PROBLEMS:
+        abort(400, "unknown problem")
+    start_ms, end_ms = _ms(data.get('start_ms'), "start_ms"), _ms(data.get('end_ms'), "end_ms")
+    _clip_range(start_ms, end_ms, "clip")
+    fixed_start, fixed_end = data.get('fixed_start_ms'), data.get('fixed_end_ms')
+    if (fixed_start is None) != (fixed_end is None):
+        abort(400, "fixed_start_ms and fixed_end_ms go together")
+    if fixed_start is not None:
+        fixed_start, fixed_end = _ms(fixed_start, "fixed_start_ms"), _ms(fixed_end, "fixed_end_ms")
+        _clip_range(fixed_start, fixed_end, "fixed")
+    text = lambda key: str(data.get(key) or '')[:200] or None
+    row = {'song': song, 'start_ms': start_ms, 'end_ms': end_ms, 'problem': data['problem'],
+           'fixed_start_ms': fixed_start, 'fixed_end_ms': fixed_end, 'query': text('query'), 'line': text('line'),
+           'db_version': time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_index["mtime"])) if _index["mtime"] else None}
+    report_id = reports.add(row)
+    obs.CLIP_REPORTS.labels(row['problem']).inc()
+    obs.log("clip_report", id=report_id, song=song, problem=row['problem'], start_ms=start_ms, end_ms=end_ms,
+            shift_start_ms=None if fixed_start is None else fixed_start - start_ms,
+            shift_end_ms=None if fixed_end is None else fixed_end - end_ms)
+    return jsonify(id=report_id), 201
 
 
 if __name__ == "__main__":

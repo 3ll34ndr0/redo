@@ -1,0 +1,16 @@
+# Clip reports from visitors (web/reports.py): a small SQLite file at /reports/reports.db.
+# local-path deletes the data together with the claim, so Argo CD must never remove it,
+# not when it's missing from git (Prune) nor when the Argo CD app is deleted (Delete).
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: extractos-reports
+  namespace: extractos
+  annotations:
+    argocd.argoproj.io/sync-options: Prune=false,Delete=false
+spec:
+  accessModes: ["ReadWriteOnce"]
+  storageClassName: local-path
+  resources:
+    requests:
+      storage: 100Mi

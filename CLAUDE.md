@@ -51,6 +51,15 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   Compartir = Web Share API with the mp3 file (WhatsApp etc.); only shown where the browser can share
   files and only over HTTPS/localhost (not `http://<LAN IP>`). Clip prefetched so iOS shares within the tap.
 
+- **Clip reports ("¿No coincide?")**: each result card has a panel: problem (starts_late, starts_early,
+  ends_early, wrong_phrase) + optional start/end nudges the visitor can hear (`/clip/<song>/<ms>-<ms>.mp3`).
+  POST `/report` (validated, 10/min + 50/day per visitor, no IP stored) → SQLite `web/reports.py`, file
+  REPORTS_DB = /reports/reports.db on PVC `extractos-reports` (local-path: deleting the claim deletes the data,
+  so it's annotated Prune=false,Delete=false). Metric `extractos_clip_reports_total{problem}`, log event
+  `clip_report`, dashboard row. Read them: `tools/reports.py export` (ssh + kubectl) then `tools/reports.py summary`
+  (per song/line: problems, median correction). Next step (not done): apply corrections, e.g. a timing-fixes file
+  used by build_db.py, or turn corrected reports into eval labels.
+
 ## Evaluation (lyrics/eval)
 - Ground truth: Audacity labels in `text/labels/` for la_bestia_pop, divina_tv_führer, etiqueta_negra,
   la_murga_de_los_renegados. **Label on the vocals channel** of `eval/audio/<song>.flac` (L=mix, R=vocals):

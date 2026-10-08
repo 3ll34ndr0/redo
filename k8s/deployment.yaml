@@ -42,6 +42,8 @@ spec:
               value: http://grafana-cloud-otel-receiver.monitoring.svc:4318
             - name: SNIPPET_CACHE_MB      # app deletes the oldest clips above this
               value: "300"
+            - name: REPORTS_DB            # clip reports (¿No coincide?), on reports-pvc.yaml
+              value: /reports/reports.db
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false
@@ -56,6 +58,8 @@ spec:
               readOnly: true
             - name: cache
               mountPath: /cache
+            - name: reports
+              mountPath: /reports
             - name: tmp
               mountPath: /tmp
           # Starting takes ~10 s with the CPU limit (imports + search index): the startup
@@ -92,6 +96,9 @@ spec:
           hostPath:
             path: /srv/extractos
             type: Directory
+        - name: reports                  # kept across restarts and deploys
+          persistentVolumeClaim:
+            claimName: extractos-reports
         - name: cache                    # clips cut so far; lost on restart, re-cut on demand
           emptyDir:
             sizeLimit: 512Mi

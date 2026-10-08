@@ -200,6 +200,25 @@ add(logs_panel("Errors", LOGS + ' |= "\\"level\\": \\"error\\""',
                description="Crashes (with traceback) and failed clip cuts. Open a line to see its trace_id"), 12, 9, 12)
 end_row(9)
 
+# ------------------------------------------------------------------ clip reports (¿No coincide?)
+
+row('Clip reports ("¿No coincide?")')
+add(timeseries("Reports by problem", [prom('sum by (problem) (increase(extractos_clip_reports_total[$__rate_interval]))', "{{problem}}")],
+               bars=True, stacked=True,
+               description="Visitors saying a clip doesn't match. Details: tools/reports.py export + summary",
+               overrides=[color("starts_late", "orange"), color("starts_early", "yellow"), color("ends_early", "purple"),
+                          color("wrong_phrase", "red")]),
+    8, 9, 0)
+add(top_table("Most reported songs",
+              f'topk(20, sum by (song) (count_over_time({LOGS} | json | event="clip_report" [$__range])))', "song", "Song"),
+    6, 9, 8)
+add(logs_panel("Latest reports",
+               LOGS + ' | json | event="clip_report" | line_format "{{.song}} · {{.problem}} · clip {{.start_ms}}-{{.end_ms}} ms · '
+                      'correction start {{.shift_start_ms}} ms, end {{.shift_end_ms}} ms"',
+               description="Corrections are what the visitor adjusted (empty: no adjustment)"),
+    10, 9, 14)
+end_row(9)
+
 dashboard = {
     "__inputs": [
         {"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "Metrics (grafanacloud-*-prom)",

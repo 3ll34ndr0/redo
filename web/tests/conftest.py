@@ -26,5 +26,6 @@ for song in fixture.SONGS:
         open(path, "wb").close()
 
 os.environ.update(DB_PATH=os.path.join(DATA, "redondos.db"), LIBRARY_PATH=os.path.join(DATA, "music"),
-                  SNIPPET_CACHE_DIR=os.path.join(DATA, "cache"), METRICS_PORT="0")
+                  SNIPPET_CACHE_DIR=os.path.join(DATA, "cache"), REPORTS_DB=os.path.join(DATA, "reports.db"),
+                  METRICS_PORT="0")
 os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)

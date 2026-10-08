@@ -9,7 +9,7 @@ WORKDIR /app
 COPY web/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY web/app.py web/search.py web/textnorm.py web/observability.py ./
+COPY web/app.py web/search.py web/textnorm.py web/observability.py web/reports.py ./
 COPY web/templates/ templates/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

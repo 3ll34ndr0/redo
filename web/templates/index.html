@@ -86,6 +86,42 @@
                         {% endfor %}
                     </div>
                     {% endif %}
+                    <div class="report">
+                        <button type="button" class="report-toggle text-xs text-gray-500 underline hover:text-gray-700"
+                            aria-expanded="false">¿No coincide?</button>
+                        <form class="report-panel mt-3 p-4 rounded-xl bg-gray-50 text-sm text-gray-700 space-y-3" hidden>
+                            <fieldset class="space-y-1">
+                                <legend class="font-bold mb-1">¿Qué pasa con este fragmento?</legend>
+                                {% for value, label in [('starts_late', 'Empieza tarde (se corta el principio)'),
+                                                        ('starts_early', 'Empieza antes (se escucha otra cosa primero)'),
+                                                        ('ends_early', 'Termina antes (se corta el final)'),
+                                                        ('wrong_phrase', 'No es esta frase')] %}
+                                <label class="flex items-center gap-2"><input type="radio" name="problem" value="{{ value }}"> {{ label }}</label>
+                                {% endfor %}
+                            </fieldset>
+                            <div class="space-y-2">
+                                <p class="font-bold">Ajustá y escuchá <span class="font-normal text-gray-500">(opcional)</span></p>
+                                {% for edge, name in [('start', 'Inicio'), ('end', 'Fin')] %}
+                                <div class="flex flex-wrap items-center gap-1">
+                                    <span class="w-12">{{ name }}</span>
+                                    {% for delta, text in [(-1000, '−1s'), (-200, '−0.2s')] %}
+                                    <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
+                                    {% endfor %}
+                                    <span class="report-{{ edge }} w-16 text-center font-mono"></span>
+                                    {% for delta, text in [(200, '+0.2s'), (1000, '+1s')] %}
+                                    <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
+                                    {% endfor %}
+                                </div>
+                                {% endfor %}
+                                <button type="button" class="report-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el ajuste</button>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <button type="submit" class="btn-celeste text-white font-bold px-4 py-2 rounded-xl">Enviar</button>
+                                <span class="report-status text-xs" aria-live="polite"></span>
+                            </div>
+                        </form>
+                        <p class="report-thanks text-sm text-green-700" hidden>¡Gracias! Lo vamos a revisar.</p>
+                    </div>
                 </div>
                 {% endfor %}
             {% elif searched %}
@@ -164,9 +200,83 @@
         const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
         card.querySelectorAll('.occurrence').forEach(b => b.setAttribute('aria-pressed', b === btn));
         selectClip(card, btn.dataset.clip);
+        card.dispatchEvent(new Event('clipchange'));
         audio.src = btn.dataset.clip;
         audio.play();
     }));
+
+    // ¿No coincide?: report a clip whose timing is wrong, optionally with the corrected times,
+    // which the visitor can hear before sending (the clip URL takes any start-end in ms)
+    const CLIP_URL = /\/clip\/([^/]+)\/(\d+)-(\d+)\.mp3/;
+    const MIN_MS = 200, MAX_MS = 60000;
+    const clock = ms => `${Math.floor(ms / 60000)}:${(ms % 60000 / 1000).toFixed(1).padStart(4, '0')}`;
+
+    document.querySelectorAll('.audio-card').forEach(card => {
+        const panel = card.querySelector('.report-panel');
+        if (!panel) return;
+        const toggle = card.querySelector('.report-toggle'), status = panel.querySelector('.report-status');
+        const audio = card.querySelector('audio');
+        let clip, fixed;     // as served / as adjusted: {song, start, end}
+
+        function reset() {
+            const m = card.dataset.clip.match(CLIP_URL);
+            clip = { song: decodeURIComponent(m[1]), start: +m[2], end: +m[3] };
+            fixed = { start: clip.start, end: clip.end };
+            panel.reset();
+            status.textContent = '';
+            show();
+        }
+        function show() {
+            panel.querySelector('.report-start').textContent = clock(fixed.start);
+            panel.querySelector('.report-end').textContent = clock(fixed.end);
+        }
+        toggle.addEventListener('click', () => {
+            const open = panel.hidden;
+            if (open) reset();
+            panel.hidden = !open;
+            toggle.setAttribute('aria-expanded', open);
+        });
+        card.addEventListener('clipchange', () => { if (!panel.hidden) reset(); });
+
+        panel.querySelectorAll('[data-edge]').forEach(b => b.addEventListener('click', () => {
+            const d = +b.dataset.delta;
+            if (b.dataset.edge === 'start') fixed.start = Math.min(Math.max(0, fixed.start + d), fixed.end - MIN_MS);
+            else fixed.end = Math.min(Math.max(fixed.start + MIN_MS, fixed.end + d), fixed.start + MAX_MS);
+            show();
+        }));
+        panel.querySelector('.report-play').addEventListener('click', () => {
+            audio.src = `/clip/${encodeURIComponent(clip.song)}/${fixed.start}-${fixed.end}.mp3`;
+            audio.play();
+        });
+
+        panel.addEventListener('submit', async e => {
+            e.preventDefault();
+            const problem = panel.querySelector('input[name=problem]:checked');
+            if (!problem) { status.textContent = 'Elegí qué pasa con el fragmento.'; return; }
+            const body = {
+                song: clip.song, start_ms: clip.start, end_ms: clip.end, problem: problem.value,
+                query: document.getElementById('lyric').value.trim(),
+                line: card.querySelector('.lyric').textContent.replace(/\s+/g, ' ').trim(),
+            };
+            if (fixed.start !== clip.start || fixed.end !== clip.end) {
+                body.fixed_start_ms = fixed.start;
+                body.fixed_end_ms = fixed.end;
+            }
+            status.textContent = 'Enviando…';
+            try {
+                const r = await fetch('/report', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+                if (r.ok) {
+                    panel.hidden = true;
+                    toggle.hidden = true;
+                    card.querySelector('.report-thanks').hidden = false;
+                } else {
+                    status.textContent = r.status === 429 ? 'Demasiados reportes seguidos, probá más tarde.' : 'No se pudo enviar.';
+                }
+            } catch (err) {
+                status.textContent = 'No se pudo enviar.';
+            }
+        });
+    });
 
     // Suggestions while typing: lyric lines that complete the phrase
     const input = document.getElementById('lyric'), list = document.getElementById('suggestions');

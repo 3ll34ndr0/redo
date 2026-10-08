@@ -234,3 +234,6 @@ webno/
 *.db
 *.db.*
 web/static/snippets/
+
+# clip reports exported by tools/reports.py (visitor data)
+reports.json
