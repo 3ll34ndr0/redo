@@ -165,7 +165,7 @@ def test_report_not_json(client):
 def test_card_has_the_report_panel(client):
     page = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
     assert "¿No coincide?" in page and "Escuchar el ajuste" in page
-    assert "Termina tarde" in page and "No sabe, no responde" in page
+    assert "Termina tarde" in page and "Quisió... (No sabe, no responde)" in page
 
 
 def test_every_problem_is_offered_accepted_and_counted(client):

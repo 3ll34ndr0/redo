@@ -52,7 +52,7 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   files and only over HTTPS/localhost (not `http://<LAN IP>`). Clip prefetched so iOS shares within the tap.
 
 - **Clip reports ("¿No coincide?")**: each result card has a panel: problem (starts_late, starts_early,
-  ends_early, ends_late, wrong_phrase, unsure = "No sabe, no responde") + optional start/end nudges the visitor can hear (`/clip/<song>/<ms>-<ms>.mp3`).
+  ends_early, ends_late, wrong_phrase, unsure = "Quisió... (No sabe, no responde)") + optional start/end nudges the visitor can hear (`/clip/<song>/<ms>-<ms>.mp3`).
   POST `/report` (validated, 10/min + 50/day per visitor, no IP stored) → SQLite `web/reports.py`, file
   REPORTS_DB = /reports/reports.db on PVC `extractos-reports` (local-path: deleting the claim deletes the data,
   so it's annotated Prune=false,Delete=false). Metric `extractos_clip_reports_total{problem}`, log event
