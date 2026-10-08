@@ -90,9 +90,13 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
 - Push to `main` touching web code/Dockerfile/`k8s/deployment.yaml` → `.github/workflows/deploy.yml` builds
   `ghcr.io/3ll34ndr0/redo:<sha>`, commits the tag into `k8s/deployment.yaml` → Argo CD app
   `extractos` (`argocd-application.yaml`, applied once by hand) syncs `k8s/` (namespace `extractos`).
-- CI (`.github/workflows/deploy.yml`): unit tests (`web/tests`, pytest) → build image → smoke test
-  (`web/tests/smoke_test.py <image>`: runs it read-only/non-root, checks pages, clip duration, metrics,
-  JSON logs) → Trivy scan (report only, fixable HIGH/CRITICAL, job summary) → on main: push + manifest.
+- CI (`.github/workflows/deploy.yml`): unit-tests (`web/tests`, pytest) → in parallel: image (build →
+  smoke test `web/tests/smoke_test.py <image>`: runs it read-only/non-root, checks pages, clip duration,
+  metrics, JSON logs → Trivy, report only, fixable HIGH/CRITICAL, in the job summary → push to ghcr.io) and
+  browser-tests (`web/tests/browser_checks.py`, Playwright/Chromium: suggestions, ¿No coincide? panel,
+  Descargar following the adjustment, reports, occurrences, phone width; ~8 s + install) → deploy (main only:
+  commit the image tag to k8s/deployment.yaml). Run locally: `cd web && ../venv/bin/python -m pytest
+  tests/browser_checks.py` (venv has playwright 1.55 + chromium).
   PRs run the tests only. Tests use MADE-UP data (`web/tests/fixture.py`): never real lyrics or audio
   (public repo). Run locally: `cd web && ../venv/bin/python -m pytest tests -q`;
   `docker build -t extractos:test . && python3 web/tests/smoke_test.py extractos:test`.

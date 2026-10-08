@@ -1,8 +1,10 @@
 name: Build, test and deploy
 
-# unit tests → build the image → smoke test it → security scan → (main only) push it and
-# point k8s/deployment.yaml at it, which Argo CD deploys. Any failing test stops the
-# chain: nothing is pushed or deployed. Pull requests run the tests only.
+#   unit-tests ──┬── image: build → smoke test → Trivy (report) → push to ghcr.io ──┬── deploy
+#                └── browser-tests: the page's JavaScript in Chromium ──────────────┘
+# deploy (main only) commits the new image tag into k8s/deployment.yaml, which Argo CD
+# applies. It needs both branches: any failing test means nothing is deployed (an image
+# pushed but not committed to the manifest never runs). Pull requests run the tests only.
 
 on:
   push:
@@ -50,11 +52,37 @@ jobs:
       - run: python -m pytest tests -q
         working-directory: web
 
+  browser-tests:
+    needs: unit-tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: web/requirements.txt
+
+      - name: Install ffmpeg (real audio for the clip and download checks)
+        run: command -v ffmpeg || { sudo apt-get update -qq && sudo apt-get install -y -qq ffmpeg; }
+
+      - run: pip install -r web/requirements.txt pytest==9.1.1 playwright==1.55.0
+
+      # the browser download (~100 MB) is cached; its system libraries are installed each run
+      - uses: actions/cache@v4
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-1.55.0-chromium
+      - run: python -m playwright install --with-deps chromium
+
+      - run: python -m pytest tests/browser_checks.py -q
+        working-directory: web
+
   image:
     needs: unit-tests
     runs-on: ubuntu-latest
     permissions:
-      contents: write                   # commit the new image tag into k8s/deployment.yaml
       packages: write                   # push to ghcr.io
     env:
       IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
@@ -96,8 +124,18 @@ jobs:
         if: github.event_name == 'push'
         run: docker push "$IMAGE"
 
+  deploy:
+    if: github.event_name == 'push'
+    needs: [image, browser-tests]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write                   # commit the new image tag into k8s/deployment.yaml
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v5
+
       - name: Update deployment manifest
-        if: github.event_name == 'push'
         run: |
           sed -i "s|image: ghcr.io/.*/redo:.*|image: $IMAGE|" k8s/deployment.yaml
           git config user.name "github-actions[bot]"
