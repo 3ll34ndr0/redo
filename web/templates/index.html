@@ -49,7 +49,7 @@
                 {% set kinds = {'exact': 'Exacto', 'partial': 'Completado', 'approx': 'Parecido'} %}
                 {% for item in results %}
                 <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
-                    data-clip="{{ item.clip }}" data-filename="{{ item.filename }}">
+                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="flex-1 min-w-0">
                             <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
@@ -166,10 +166,12 @@
         try { navigator.sendBeacon('/event', new Blob([body], { type: 'application/json' })); } catch (e) {}
     }
 
-    function selectClip(card, url) {
+    // The card's current clip: what Descargar and Compartir send. prefetch: download it now for
+    // Compartir (skipped while nudging times in ¿No coincide?, which would cut a clip per click).
+    function selectClip(card, url, prefetch = true) {
         card.dataset.clip = url;
         card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
-        if (canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
+        if (prefetch && canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
     }
 
     document.querySelectorAll('.audio-card').forEach(card => {
@@ -201,6 +203,7 @@
     document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {
         const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
         card.querySelectorAll('.occurrence').forEach(b => b.setAttribute('aria-pressed', b === btn));
+        card.dataset.served = btn.dataset.clip;
         selectClip(card, btn.dataset.clip);
         card.dispatchEvent(new Event('clipchange'));
         audio.src = btn.dataset.clip;
@@ -220,8 +223,12 @@
         const audio = card.querySelector('audio');
         let clip, fixed;     // as served / as adjusted: {song, start, end}
 
+        const adjustedUrl = () => `/clip/${encodeURIComponent(clip.song)}/${fixed.start}-${fixed.end}.mp3`;
+
         function reset() {
-            const m = card.dataset.clip.match(CLIP_URL);
+            // back to the clip as served (a previous adjustment may still be the current clip)
+            if (card.dataset.clip !== card.dataset.served) selectClip(card, card.dataset.served, false);
+            const m = card.dataset.served.match(CLIP_URL);
             clip = { song: decodeURIComponent(m[1]), start: +m[2], end: +m[3] };
             fixed = { start: clip.start, end: clip.end };
             panel.reset();
@@ -245,9 +252,11 @@
             if (b.dataset.edge === 'start') fixed.start = Math.min(Math.max(0, fixed.start + d), fixed.end - MIN_MS);
             else fixed.end = Math.min(Math.max(fixed.start + MIN_MS, fixed.end + d), fixed.start + MAX_MS);
             show();
+            selectClip(card, adjustedUrl(), false);     // Descargar gives what the times say
         }));
         panel.querySelector('.report-play').addEventListener('click', () => {
-            audio.src = `/clip/${encodeURIComponent(clip.song)}/${fixed.start}-${fixed.end}.mp3`;
+            selectClip(card, adjustedUrl());              // and Compartir sends the adjusted clip
+            audio.src = card.dataset.clip;
             audio.play();
         });
 
