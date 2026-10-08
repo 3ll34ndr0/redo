@@ -19,6 +19,8 @@ from flask import g, got_request_exception, request
 from opentelemetry import trace
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
+from reports import PROBLEMS
+
 SERVICE = os.getenv("OTEL_SERVICE_NAME", "extractos")
 tracer = trace.get_tracer(SERVICE)
 
@@ -55,7 +57,7 @@ for _result in ("cached", "cut", "failed"):
         CLIPS.labels(_result, _kind)
 for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)
-for _problem in ("starts_late", "starts_early", "ends_early", "wrong_phrase"):
+for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
 
 

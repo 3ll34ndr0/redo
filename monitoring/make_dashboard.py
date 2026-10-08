@@ -207,7 +207,7 @@ add(timeseries("Reports by problem", [prom('sum by (problem) (increase(extractos
                bars=True, stacked=True,
                description="Visitors saying a clip doesn't match. Details: tools/reports.py export + summary",
                overrides=[color("starts_late", "orange"), color("starts_early", "yellow"), color("ends_early", "purple"),
-                          color("wrong_phrase", "red")]),
+                          color("ends_late", "blue"), color("wrong_phrase", "red"), color("unsure", "text")]),
     8, 9, 0)
 add(top_table("Most reported songs",
               f'topk(20, sum by (song) (count_over_time({LOGS} | json | event="clip_report" [$__range])))', "song", "Song"),

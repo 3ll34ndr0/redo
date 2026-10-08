@@ -95,7 +95,9 @@
                                 {% for value, label in [('starts_late', 'Empieza tarde (se corta el principio)'),
                                                         ('starts_early', 'Empieza antes (se escucha otra cosa primero)'),
                                                         ('ends_early', 'Termina antes (se corta el final)'),
-                                                        ('wrong_phrase', 'No es esta frase')] %}
+                                                        ('ends_late', 'Termina tarde (se escucha otra cosa al final)'),
+                                                        ('wrong_phrase', 'No es esta frase'),
+                                                        ('unsure', 'No sabe, no responde (algo no anda, pero no sé qué)')] %}
                                 <label class="flex items-center gap-2"><input type="radio" name="problem" value="{{ value }}"> {{ label }}</label>
                                 {% endfor %}
                             </fieldset>

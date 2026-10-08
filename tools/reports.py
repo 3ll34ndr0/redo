@@ -22,8 +22,8 @@ SSH = os.getenv("EXTRACTOS_SSH", "root@fs2-usw.delightvoip.com")
 # Runs inside the pod (it has Python): prints every report as JSON
 DUMP = ("import json,sqlite3; c=sqlite3.connect('file:/reports/reports.db?mode=ro',uri=True); "
         "c.row_factory=sqlite3.Row; print(json.dumps([dict(r) for r in c.execute('SELECT * FROM reports ORDER BY id')]))")
-PROBLEM_TEXT = {"starts_late": "starts late", "starts_early": "starts early",
-                "ends_early": "ends early", "wrong_phrase": "wrong phrase"}
+PROBLEM_TEXT = {"starts_late": "starts late", "starts_early": "starts early", "ends_early": "ends early",
+                "ends_late": "ends late", "wrong_phrase": "wrong phrase", "unsure": "not sure what"}
 
 
 def export(out):

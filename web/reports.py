@@ -11,7 +11,7 @@ import threading
 import time
 from contextlib import closing
 
-PROBLEMS = ("starts_late", "starts_early", "ends_early", "wrong_phrase")
+PROBLEMS = ("starts_late", "starts_early", "ends_early", "ends_late", "wrong_phrase", "unsure")
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS reports (
