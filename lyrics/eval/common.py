@@ -13,6 +13,7 @@ CORPUS = os.path.join(TEXT, "corpus")                # <name>.txt lyrics as scra
 SUNG = os.path.join(TEXT, "sung")                    # <song>.txt lyrics as sung (sung.py + hand edits)
 LABELS = os.path.join(TEXT, "labels")                # ground truth: Audacity labels per song
 LABELS_TODO = os.path.join(TEXT, "labels_todo")      # pre-filled labels to correct (make_labels.py)
+FIXES = os.path.join(TEXT, "timing_fixes.json")      # hand corrections from clip reports (build_db.py)
 MUSIC = os.path.join(LYRICS_DIR, "music")            # <song>.mp3 original mix
 STEMS = os.path.join(LYRICS_DIR, "separated", "htdemucs_ft")
 

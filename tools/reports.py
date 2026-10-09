@@ -7,9 +7,16 @@
     tools/reports.py review [reports.json]       go through the reports not reviewed yet: clip URLs
                                                  (as served / as the visitor adjusted it), record a decision
     tools/reports.py review --list [--all]       only print them (--all: reviewed ones too)
+    tools/reports.py review --id 3 [--id 4]      review those reports again
 
 Review decisions are kept in reports-reviewed.json next to the export (not in git: notes may
 quote lyrics), keyed by report id + creation time, so a new export only shows new reports.
+
+Two decisions change the search database (via lyrics/text/timing_fixes.json, private repo,
+applied by lyrics/build_db.py; then rsync the DB):
+  [a] apply the visitor's adjustment: new start for the clip's first word, new end for its last
+  [d] delete the clip's words: they were aligned where they aren't sung
+The clip's words are found in the local web/redondos.db by the served times.
 
 The pod's database is /reports/reports.db (web/reports.py). The server is
 $EXTRACTOS_SSH, default root@fs2-usw.delightvoip.com.
@@ -81,8 +88,12 @@ def summary(rows):
         print()
 
 
-DECISIONS = {"l": "lyrics fixed", "c": "chorus added", "t": "timing off, not fixed yet",
-             "o": "other fix", "n": "nothing wrong"}
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+SEARCH_DB = os.path.join(ROOT, "web", "redondos.db")
+# Corrections applied by lyrics/build_db.py; in the PRIVATE lyrics repo (entries quote words)
+FIXES = os.path.join(ROOT, "lyrics", "text", "timing_fixes.json")
+DECISIONS = {"a": "apply the adjustment", "d": "delete the words", "l": "lyrics fixed", "c": "chorus added",
+             "t": "timing off, leave it", "o": "other fix", "n": "nothing wrong"}
 
 
 def clip_url(song, start_ms, end_ms):
@@ -125,26 +136,75 @@ def show(r, done=None):
         print(f"   reviewed: {done['decision']} ({done['at']})" + (f": {done['note']}" if done.get("note") else ""))
 
 
-def review(rows, reviewed_path, list_only=False, show_all=False):
+def phrase_words(conn, song, start_ms, end_ms):
+    """The aligned words a clip was made of: [(tok, word, start, end), ...] or None.
+
+    The app builds clip URLs from int(start * 1000) of the phrase's first word and
+    int(end * 1000) of its last (web/app.py), so the served times identify them, as long
+    as the local search database has the same timings as the server's.
+    """
+    rows = conn.execute("SELECT tok, orig, start, end FROM words WHERE song = ? GROUP BY tok ORDER BY tok",
+                        (song,)).fetchall()
+    for a, (tok, _, s, _) in enumerate(rows):
+        if abs(int(s * 1000) - start_ms) <= 1:
+            for b in range(a, len(rows)):
+                if abs(int(rows[b][3] * 1000) - end_ms) <= 1:
+                    return rows[a:b + 1]
+    return None
+
+
+def load_fixes(path):
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def make_fix(r, words, action, note):
+    """One entry of timing_fixes.json (see lyrics/build_db.py: apply_fixes)."""
+    fix = {"report": report_key(r), "song": r["song"], "action": action,
+           "first": words[0][0], "last": words[-1][0], "first_word": words[0][1], "last_word": words[-1][1]}
+    if action == "adjust":
+        if r["fixed_start_ms"] != r["start_ms"]:
+            fix["start"] = r["fixed_start_ms"] / 1000
+        if r["fixed_end_ms"] != r["end_ms"]:
+            fix["end"] = r["fixed_end_ms"] / 1000
+    fix.update(added=time.strftime("%Y-%m-%d"), note=note)
+    return fix
+
+
+def review(rows, reviewed_path, list_only=False, show_all=False, ids=(), db=SEARCH_DB, fixes_path=FIXES):
     reviewed = load_reviewed(reviewed_path)
-    todo = [r for r in rows if show_all or report_key(r) not in reviewed]
-    print(f"{len(rows)} reports, {len(rows) - sum(report_key(r) not in reviewed for r in rows)} reviewed, "
-          f"{sum(report_key(r) not in reviewed for r in rows)} to review  ({reviewed_path})\n")
+    pending = sum(report_key(r) not in reviewed for r in rows)
+    if ids:
+        todo = [r for r in rows if r["id"] in ids]
+    else:
+        todo = [r for r in rows if show_all or report_key(r) not in reviewed]
+    print(f"{len(rows)} reports, {len(rows) - pending} reviewed, {pending} to review  ({reviewed_path})\n")
     if list_only or not todo:
         for r in todo:
             show(r, reviewed.get(report_key(r)))
             print()
         return
-    keys = "  ".join(f"[{k}] {v}" for k, v in DECISIONS.items())
+    conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True) if os.path.exists(db) else None
     for n, r in enumerate(todo, 1):
         print(f"── {n}/{len(todo)}")
         show(r, reviewed.get(report_key(r)))
+        words = phrase_words(conn, r["song"], r["start_ms"], r["end_ms"]) if conn else None
+        if words:
+            print(f"   words:    {words[0][0]}-{words[-1][0]} in the alignment: " +
+                  " ".join(w for _, w, _, _ in words))
+        else:
+            print(f"   words:    not found in {db} (re-aligned since the report?): [a]/[d] unavailable")
+        choices = {k: v for k, v in DECISIONS.items()
+                   if (k != "a" or (words and r.get("fixed_start_ms") is not None)) and (k != "d" or words)}
+        keys = "  ".join(f"[{k}] {v}" for k, v in choices.items())
         while True:
             try:
                 answer = input(f"   {keys}  [s] skip  [q] quit\n   > ").strip().lower()
             except EOFError:
                 answer = "q"
-            if answer in DECISIONS or answer in ("s", "q"):
+            if answer in choices or answer in ("s", "q"):
                 break
         if answer == "q":
             break
@@ -155,6 +215,12 @@ def review(rows, reviewed_path, list_only=False, show_all=False):
             note = input("   note (optional): ").strip()
         except EOFError:
             note = ""
+        if answer in ("a", "d"):
+            fixes = [f for f in load_fixes(fixes_path) if f["report"] != report_key(r)]   # re-review replaces
+            fixes.append(make_fix(r, words, "adjust" if answer == "a" else "delete", note))
+            os.makedirs(os.path.dirname(fixes_path), exist_ok=True)
+            save_reviewed(fixes_path, fixes)
+            print(f"   → {fixes_path}: rebuild with lyrics/build_db.py, rsync the DB, commit lyrics/text")
         reviewed[report_key(r)] = {"decision": DECISIONS[answer], "note": note,
                                    "at": time.strftime("%Y-%m-%d %H:%M")}
         save_reviewed(reviewed_path, reviewed)      # after each answer: quitting loses nothing
@@ -176,6 +242,9 @@ def main():
     r.add_argument("--list", action="store_true", help="only print, don't ask")
     r.add_argument("--all", action="store_true", help="include reports already reviewed")
     r.add_argument("--reviewed", help="decisions file (default: reports-reviewed.json next to the export)")
+    r.add_argument("--id", type=int, action="append", default=[], help="review this report again (repeatable)")
+    r.add_argument("--search-db", default=SEARCH_DB, help="search database to find the clip's words")
+    r.add_argument("--fixes", default=FIXES, help="timing corrections file ([a] and [d] write it)")
     args = p.parse_args()
     if args.cmd == "export":
         export(args.out)
@@ -183,7 +252,7 @@ def main():
         summary(load(args.file, args.db))
     else:
         reviewed = args.reviewed or os.path.join(os.path.dirname(os.path.abspath(args.file)), "reports-reviewed.json")
-        review(load(args.file), reviewed, args.list, args.all)
+        review(load(args.file), reviewed, args.list, args.all, args.id, args.search_db, args.fixes)
 
 
 if __name__ == "__main__":

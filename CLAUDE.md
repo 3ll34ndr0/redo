@@ -58,9 +58,13 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   so it's annotated Prune=false,Delete=false). Metric `extractos_clip_reports_total{problem}`, log event
   `clip_report`, dashboard row. Read them: `tools/reports.py export` (ssh + kubectl) then `tools/reports.py summary`
   (per song/line: problems, median correction), then `tools/reports.py review`: per report the clip URLs (served
-  and as adjusted) and a recorded decision (lyrics fixed / chorus added / timing / other / nothing wrong + note) in
-  `reports-reviewed.json` next to the export (gitignored, like reports.json); later runs show only new reports. Next step (not done): apply corrections, e.g. a timing-fixes file
-  used by build_db.py, or turn corrected reports into eval labels.
+  and as adjusted), the aligned words it covers (found in the local web/redondos.db by the served times), and a
+  decision recorded in `reports-reviewed.json` next to the export (gitignored); later runs show only new reports,
+  `--id N` reviews one again. Decisions [a] apply the visitor's adjustment (new start of the first word / end of the
+  last) and [d] delete the words (aligned where nothing is sung) write `lyrics/text/timing_fixes.json` (PRIVATE repo),
+  which `lyrics/build_db.py` applies on top of the alignment (median if several; each fix checks its first/last word
+  so it's skipped with a warning after a re-alignment or lyrics edit). Then rsync the DB and commit lyrics/text.
+  Not done: turning corrected reports into eval labels.
 
 ## Evaluation (lyrics/eval)
 - Ground truth: Audacity labels in `text/labels/` for la_bestia_pop, divina_tv_führer, etiqueta_negra,
