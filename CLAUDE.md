@@ -57,7 +57,9 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   REPORTS_DB = /reports/reports.db on PVC `extractos-reports` (local-path: deleting the claim deletes the data,
   so it's annotated Prune=false,Delete=false). Metric `extractos_clip_reports_total{problem}`, log event
   `clip_report`, dashboard row. Read them: `tools/reports.py export` (ssh + kubectl) then `tools/reports.py summary`
-  (per song/line: problems, median correction). Next step (not done): apply corrections, e.g. a timing-fixes file
+  (per song/line: problems, median correction), then `tools/reports.py review`: per report the clip URLs (served
+  and as adjusted) and a recorded decision (lyrics fixed / chorus added / timing / other / nothing wrong + note) in
+  `reports-reviewed.json` next to the export (gitignored, like reports.json); later runs show only new reports. Next step (not done): apply corrections, e.g. a timing-fixes file
   used by build_db.py, or turn corrected reports into eval labels.
 
 ## Evaluation (lyrics/eval)
@@ -82,7 +84,7 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   Keep it in sync when pipeline facts change here.
 - Code committed 2026-10-05 (not pushed yet: pushing to main triggers the deploy workflow).
   `.gitignore` keeps out audio, `*.db`, `eval/out/`, `lyrics/text/` and the old experiments (`mfa/`,
-  `la_bestia_pop/`, `.la_bestia_pop/`, `webno/`: they contain lyrics). `git add -A` is safe except `a` (user's note).
+  `la_bestia_pop/`, `.la_bestia_pop/`, `webno/`: they contain lyrics). `git add -A` is safe.
 - Private lyrics repo redo-letras: pushed 2026-10-05.
 - Go-live steps left: rename GitHub repo malvinasargentinas → redo; /srv/extractos + rsync on the VPS;
   DNS record; push; make the ghcr package public; then `kubectl apply -f argocd-application.yaml`.

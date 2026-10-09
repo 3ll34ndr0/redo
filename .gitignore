@@ -237,3 +237,4 @@ web/static/snippets/
 
 # clip reports exported by tools/reports.py (visitor data)
 reports.json
+reports-reviewed.json
