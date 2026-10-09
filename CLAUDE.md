@@ -77,6 +77,9 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
 - ~1.2 GB MMS model in ~/.cache/torch/hub (first run downloads it slowly).
 
 ## Open
+- The data pipeline (lyrics → music → Demucs → alignment → checks → DB) is documented for reuse with other
+  artists, with a one-agent-per-step plan, in `~/arenero/extractos-pipeline` (separate repo, 2026-10-09).
+  Keep it in sync when pipeline facts change here.
 - Code committed 2026-10-05 (not pushed yet: pushing to main triggers the deploy workflow).
   `.gitignore` keeps out audio, `*.db`, `eval/out/`, `lyrics/text/` and the old experiments (`mfa/`,
   `la_bestia_pop/`, `.la_bestia_pop/`, `webno/`: they contain lyrics). `git add -A` is safe except `a` (user's note).

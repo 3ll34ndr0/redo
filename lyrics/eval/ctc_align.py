@@ -14,7 +14,8 @@ Usage: ctc_align.py <song> [<song> ...]        (writes out/ctc.json, merged)
        add --sung to use ../sung/<song>.txt (from sung.py) when it exists,
        writing out/ctc_sung.json instead
 
-Songs are named after their stem (= music/<song>.mp3, what the web app cuts);
+Songs are named after their stem (= music/<song>.mp3, what the web app cuts;
+"<song>.txt" or "<song>.mp3" also work);
 the lyrics file is found by common.lyrics_path (accents/punctuation-insensitive).
 """
 
@@ -191,6 +192,14 @@ def main():
         args = sorted(s for s in os.listdir(STEMS)
                       if os.path.exists(os.path.join(STEMS, s, "vocals.mp3")) and lyrics_path(s) and s not in done)
         print(f"{len(args)} songs to align", flush=True)
+    else:
+        # accept file names too (perdiendo_el_tiempo.txt, music/x.mp3): the song is the bare name
+        args = [os.path.splitext(os.path.basename(a))[0] if a.endswith((".txt", ".mp3")) else a for a in args]
+        for song in args:
+            if not os.path.exists(os.path.join(STEMS, song, "vocals.mp3")):
+                sys.exit(f"{song}: unknown song (no vocal stem {os.path.join(STEMS, song, 'vocals.mp3')})")
+            if not lyrics_path(song):
+                sys.exit(f"{song}: no lyrics file found")
     model = bundle.get_model(with_star=True)
     model.eval()
     dictionary = bundle.get_dict(star=STAR)
