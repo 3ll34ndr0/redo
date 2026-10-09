@@ -14,7 +14,7 @@ quote lyrics), keyed by report id + creation time, so a new export only shows ne
 
 Two decisions change the search database (via lyrics/text/timing_fixes.json, private repo,
 applied by lyrics/build_db.py; then rsync the DB):
-  [a] apply the visitor's adjustment: new start for the clip's first word, new end for its last
+  [a] apply the visitor's adjustment: the clip's phrase gets the new start/end (build_db.py fit_span)
   [d] delete the clip's words: they were aligned where they aren't sung
 The clip's words are found in the local web/redondos.db by the served times.
 

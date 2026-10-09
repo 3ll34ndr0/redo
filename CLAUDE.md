@@ -60,8 +60,8 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   (per song/line: problems, median correction), then `tools/reports.py review`: per report the clip URLs (served
   and as adjusted), the aligned words it covers (found in the local web/redondos.db by the served times), and a
   decision recorded in `reports-reviewed.json` next to the export (gitignored); later runs show only new reports,
-  `--id N` reviews one again. Decisions [a] apply the visitor's adjustment (new start of the first word / end of the
-  last) and [d] delete the words (aligned where nothing is sung) write `lyrics/text/timing_fixes.json` (PRIVATE repo),
+  `--id N` reviews one again. Decisions [a] apply the visitor's adjustment (the phrase gets the new start/end; words the
+  aligner left outside it are spread into the edges: build_db.fit_span) and [d] delete the words (aligned where nothing is sung) write `lyrics/text/timing_fixes.json` (PRIVATE repo),
   which `lyrics/build_db.py` applies on top of the alignment (median if several; each fix checks its first/last word
   so it's skipped with a warning after a re-alignment or lyrics edit). Then rsync the DB and commit lyrics/text.
   Not done: turning corrected reports into eval labels.
