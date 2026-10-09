@@ -1,6 +1,6 @@
 name: Build, test and deploy
 
-#   unit-tests ──┬── image: build → smoke test → Trivy (report) → push to ghcr.io ──┬── deploy
+#   unit-tests ──┬── image: build → smoke test → Trivy (gate) → push to ghcr.io ────┬── deploy
 #                └── browser-tests: the page's JavaScript in Chromium ──────────────┘
 # deploy (main only) commits the new image tag into k8s/deployment.yaml, which Argo CD
 # applies. It needs both branches: any failing test means nothing is deployed (an image
@@ -83,7 +83,9 @@ jobs:
     needs: unit-tests
     runs-on: ubuntu-latest
     permissions:
+      contents: read                    # checkout (listing permissions drops the default)
       packages: write                   # push to ghcr.io
+      security-events: write            # upload Trivy's results to the Security tab
     env:
       IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
     steps:
@@ -96,8 +98,26 @@ jobs:
       - name: Smoke test the image
         run: python3 web/tests/smoke_test.py "$IMAGE"
 
-      # report only for now: fixable HIGH/CRITICAL vulnerabilities, in the job summary
-      - name: Security scan (Trivy)
+      # every fixable vulnerability → GitHub's Security tab (Code scanning), whatever the gate says
+      - name: Security scan for the Security tab (Trivy)
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          image-ref: ${{ env.IMAGE }}
+          ignore-unfixed: true
+          format: sarif
+          output: trivy.sarif
+          exit-code: "0"
+
+      - name: Upload to the Security tab
+        if: always() && hashFiles('trivy.sarif') != ''
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy.sarif
+          category: trivy-image
+
+      # the gate: a fixable HIGH/CRITICAL vulnerability fails the job, so the image is
+      # not pushed and nothing is deployed (fix: rebuild on a newer base / bump the package)
+      - name: Security gate (Trivy)
         uses: aquasecurity/trivy-action@v0.36.0
         with:
           image-ref: ${{ env.IMAGE }}
@@ -105,9 +125,11 @@ jobs:
           ignore-unfixed: true
           format: table
           output: trivy.txt
-          exit-code: "0"
+          exit-code: "1"
+          skip-setup-trivy: true        # installed (and its database fetched) by the scan above
 
       - name: Scan report in the job summary
+        if: always() && hashFiles('trivy.txt') != ''
         run: |
           { echo "### Trivy: fixable HIGH/CRITICAL vulnerabilities"; echo '```'; cat trivy.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
 

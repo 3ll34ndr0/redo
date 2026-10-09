@@ -92,7 +92,8 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   `extractos` (`argocd-application.yaml`, applied once by hand) syncs `k8s/` (namespace `extractos`).
 - CI (`.github/workflows/deploy.yml`): unit-tests (`web/tests`, pytest) → in parallel: image (build →
   smoke test `web/tests/smoke_test.py <image>`: runs it read-only/non-root, checks pages, clip duration,
-  metrics, JSON logs → Trivy, report only, fixable HIGH/CRITICAL, in the job summary → push to ghcr.io) and
+  metrics, JSON logs → Trivy: every fixable vulnerability uploaded (SARIF) to the repo's Security tab →
+  Code scanning; GATE: a fixable HIGH/CRITICAL fails the job (no push, no deploy; table in the job summary) → push to ghcr.io) and
   browser-tests (`web/tests/browser_checks.py`, Playwright/Chromium: suggestions, ¿No coincide? panel,
   Descargar following the adjustment, reports, occurrences, phone width; ~8 s + install) → deploy (main only:
   commit the image tag to k8s/deployment.yaml). Run locally: `cd web && ../venv/bin/python -m pytest
