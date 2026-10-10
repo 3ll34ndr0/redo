@@ -76,6 +76,14 @@ jobs:
           key: playwright-1.55.0-chromium-firefox-webkit
       - run: python -m playwright install --with-deps chromium firefox webkit
 
+      # Runners have no sound card: Firefox then fails every playback (OnMediaSinkAudioError).
+      # A silent PulseAudio sink gives it one; Chromium and WebKit don't need it.
+      - name: Virtual audio output for Firefox
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq pulseaudio
+          pulseaudio -D --exit-idle-time=-1 -n --load=module-null-sink --load=module-native-protocol-unix
+          pactl info | grep "Default Sink"
+
       - run: python -m pytest tests/browser_checks.py -q
         working-directory: web
 

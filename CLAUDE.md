@@ -109,7 +109,8 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   Code scanning; GATE: a fixable HIGH/CRITICAL fails the job (no push, no deploy; table in the job summary) → push to ghcr.io) and
   browser-tests (`web/tests/browser_checks.py`, Playwright in Chromium + Firefox + WebKit: suggestions,
   ¿No coincide? panel, Descargar following the adjustment, reports, occurrences, play button, phone width;
-  ~75 s + install; each engine sends its own CF-Connecting-IP so the per-visitor limits don't trip) → deploy (main only:
+  ~75 s + install; each engine sends its own CF-Connecting-IP so the per-visitor limits don't trip;
+  CI starts a PulseAudio null sink: with no sound card Firefox fails every playback, OnMediaSinkAudioError) → deploy (main only:
   commit the image tag to k8s/deployment.yaml). Run locally: `cd web && ../venv/bin/python -m pytest
   tests/browser_checks.py` (venv has playwright 1.55 + all three engines; `BROWSERS=chromium` runs one).
   PRs run the tests only. Tests use MADE-UP data (`web/tests/fixture.py`): never real lyrics or audio
