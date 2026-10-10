@@ -1,16 +1,19 @@
-"""Browser tests of the page's JavaScript (Chromium via Playwright), on the made-up data.
+"""Browser tests of the page's JavaScript (Playwright: Chromium, Firefox and WebKit), on the made-up data.
 
 Not collected with the unit tests (the name matches neither test_*.py nor *_test.py): run explicitly,
     cd web && python -m pytest tests/browser_checks.py
-Needs `pip install playwright` + `playwright install chromium`, and ffmpeg for real audio
-(conftest.py makes it); without ffmpeg the clip and download checks are skipped.
+Needs `pip install playwright` + `playwright install chromium firefox webkit`, and ffmpeg for
+real audio (conftest.py makes it); without ffmpeg the clip, download and playback checks are skipped.
+Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer.
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (nudges, preview, Descargar following the
-adjustment, sending a report, reset), other occurrences, phone width, JavaScript errors.
+adjustment, sending a report, reset), other occurrences, the play button, phone width,
+JavaScript errors.
 """
 
 import os
+import re
 import socket
 import sqlite3
 import subprocess
@@ -19,11 +22,23 @@ import time
 import urllib.request
 
 import pytest
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import expect, sync_playwright
 
 from conftest import HAS_FFMPEG
 
 WEB = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
+# WebKit = Safari's engine, Firefox = Gecko: the play button once vanished in Chrome only
+ENGINES = os.environ.get("BROWSERS", "chromium firefox webkit").split()
+
+
+def as_visitor(target, browser, base_url):
+    """Each engine is its own visitor (the header Cloudflare sets), so running all three
+    doesn't hit the app's per-visitor limits (30 searches a minute). Only on requests to
+    the app: the Tailwind CDN, behind Cloudflare itself, refuses that header."""
+    ip = f"10.0.0.{ENGINES.index(browser.browser_type.name) + 1}"
+    target.route(base_url + "/**", lambda route: route.continue_(
+        headers={**route.request.headers, "CF-Connecting-IP": ip}))
+    return target
 
 
 def free_port():
@@ -51,17 +66,17 @@ def base_url():
     proc.wait(10)
 
 
-@pytest.fixture(scope="module")
-def browser():
+@pytest.fixture(scope="module", params=ENGINES)
+def browser(request):
     with sync_playwright() as p:
-        b = p.chromium.launch()
+        b = getattr(p, request.param).launch()
         yield b
         b.close()
 
 
 @pytest.fixture
-def page(browser):
-    ctx = browser.new_context(accept_downloads=True)
+def page(browser, base_url):
+    ctx = as_visitor(browser.new_context(accept_downloads=True), browser, base_url)
     page = ctx.new_page()
     page.js_errors = []
     page.on("pageerror", lambda e: page.js_errors.append(str(e)))
@@ -176,8 +191,68 @@ def test_other_occurrence_resets_the_panel(page, base_url):
     assert download_href(card) == chips.nth(1).get_attribute("data-clip")
 
 
+# --- play button
+
+@pytest.mark.parametrize("width", [1280, 375])
+def test_play_button_is_visible(browser, base_url, width):
+    page = as_visitor(browser.new_page(viewport={"width": width, "height": 800}), browser, base_url)
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    box = page.locator(".play-btn").first.bounding_box()
+    # <audio controls> used to be 0 px wide in Chrome at desktop width
+    assert box and box["width"] >= 100 and box["height"] >= 40
+    page.close()
+
+
+def state(card):
+    return expect(card.locator(".play-btn"))
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_play_button_plays_pauses_and_stops_the_others(page, base_url):
+    page.goto(base_url + "/search?lyric=brillar")                       # a line in each fixture song
+    cards = page.locator(".audio-card")
+    assert cards.count() >= 2
+    first, second = cards.nth(0), cards.nth(1)
+    page.evaluate("document.querySelectorAll('audio').forEach(a => a.loop = true)")   # clips last ~1 s
+    first.locator(".play-btn").click()
+    state(first).to_have_attribute("data-state", "playing")
+    expect(first.locator(".play-label")).to_have_text("❚❚ Pausa")
+    state(first).to_have_attribute("aria-label", re.compile("^Pausar: "))
+    second.locator(".play-btn").click()                                 # one clip at a time
+    state(second).to_have_attribute("data-state", "playing")
+    state(first).to_have_attribute("data-state", "idle")
+    assert first.locator("audio").evaluate("a => a.paused")
+    second.locator(".play-btn").click()                                 # second tap pauses
+    state(second).to_have_attribute("data-state", "idle")
+    expect(second.locator(".play-label")).to_have_text("▶ Escuchar")
+    assert second.locator("audio").evaluate("a => a.paused")
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_other_occurrence_plays_through_the_button(page, base_url):
+    page.goto(base_url + "/search?lyric=vamos+a+brillar+esta+noche")
+    card = page.locator(".audio-card").first
+    page.evaluate("document.querySelectorAll('audio').forEach(a => a.loop = true)")
+    card.locator(".occurrence").nth(1).click()
+    state(card).to_have_attribute("data-state", "playing")              # the button shows plays started elsewhere
+
+
+def test_play_button_offers_a_retry_when_the_clip_fails(page, base_url):
+    page.route("**/clip/**", lambda route: route.fulfill(status=503, body="busy"))
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    card = page.locator(".audio-card").first
+    card.locator(".play-btn").click()
+    state(card).to_have_attribute("data-state", "error")
+    expect(card.locator(".play-label")).to_have_text("↻ Reintentar")
+    if HAS_FFMPEG:                                                      # the retry downloads it again
+        page.unroute("**/clip/**")
+        card.locator("audio").evaluate("a => a.loop = true")
+        card.locator(".play-btn").click()
+        state(card).to_have_attribute("data-state", "playing")
+
+
 def test_phone_width_has_no_sideways_scroll(browser, base_url):
-    page = browser.new_page(viewport={"width": 375, "height": 800})
+    page = as_visitor(browser.new_page(viewport={"width": 375, "height": 800}), browser, base_url)
     page.goto(base_url + "/search?lyric=sale+sobre")
     page.locator(".report-toggle").first.click()
     assert page.evaluate("document.documentElement.scrollWidth") <= 375

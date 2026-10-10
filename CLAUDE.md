@@ -47,6 +47,10 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   `words` has `line`/`tok`/`orig` (build_db.py re-reads sung/corpus file) to show the line highlighted.
   `/suggest?q=` completes lines while typing. Clips cut lazily by `/clip/<song>/<ms>-<ms>.mp3`
   (phrase −0.2 s/+0.3 s, cached in SNIPPET_CACHE_DIR, file name has ms timing).
+- **Play button** (per card): our own `.play-btn` driving a control-less `<audio>` (`<audio controls>` was
+  0 px wide in Chrome at desktop width). Label/state (`data-state` idle/loading/playing/error) follow the
+  audio's events; one clip at a time; error → "↻ Reintentar" (`load()` again). Decide by `data-state`, not
+  `audio.paused` (Firefox/WebKit keep paused=false after a failed load; Chromium fires pause after error).
 - **Share/download** (per card): Descargar = `/clip/...mp3?name=<Song - words.mp3>` (attachment).
   Compartir = Web Share API with the mp3 file (WhatsApp etc.); only shown where the browser can share
   files and only over HTTPS/localhost (not `http://<LAN IP>`). Clip prefetched so iOS shares within the tap.
@@ -103,10 +107,11 @@ Repo: github.com/3ll34ndr0/redo. User writes in Spanish/English.
   smoke test `web/tests/smoke_test.py <image>`: runs it read-only/non-root, checks pages, clip duration,
   metrics, JSON logs → Trivy: every fixable vulnerability uploaded (SARIF) to the repo's Security tab →
   Code scanning; GATE: a fixable HIGH/CRITICAL fails the job (no push, no deploy; table in the job summary) → push to ghcr.io) and
-  browser-tests (`web/tests/browser_checks.py`, Playwright/Chromium: suggestions, ¿No coincide? panel,
-  Descargar following the adjustment, reports, occurrences, phone width; ~8 s + install) → deploy (main only:
+  browser-tests (`web/tests/browser_checks.py`, Playwright in Chromium + Firefox + WebKit: suggestions,
+  ¿No coincide? panel, Descargar following the adjustment, reports, occurrences, play button, phone width;
+  ~75 s + install; each engine sends its own CF-Connecting-IP so the per-visitor limits don't trip) → deploy (main only:
   commit the image tag to k8s/deployment.yaml). Run locally: `cd web && ../venv/bin/python -m pytest
-  tests/browser_checks.py` (venv has playwright 1.55 + chromium).
+  tests/browser_checks.py` (venv has playwright 1.55 + all three engines; `BROWSERS=chromium` runs one).
   PRs run the tests only. Tests use MADE-UP data (`web/tests/fixture.py`): never real lyrics or audio
   (public repo). Run locally: `cd web && ../venv/bin/python -m pytest tests -q`;
   `docker build -t extractos:test . && python3 web/tests/smoke_test.py extractos:test`.

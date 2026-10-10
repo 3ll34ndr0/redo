@@ -14,6 +14,12 @@
         .btn-celeste { background-color: #74ACDF; transition: all 0.3s; }
         .btn-celeste:hover { background-color: #5b92c4; transform: translateY(-2px); }
         .audio-card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
+        /* Play button: our own control instead of <audio controls>, which looks different in
+           every browser and collapsed to 0 px in Chrome at desktop width */
+        .play-btn { position: relative; overflow: hidden; }
+        .play-btn[data-state="loading"] { cursor: progress; }
+        .play-progress { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px; background: #F6B40E;
+                         transform: scaleX(0); transform-origin: left; }
         .lyric mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
         #suggestions li[aria-selected="true"] { background: #74ACDF22; }
     </style>
@@ -56,10 +62,12 @@
                             {% if item.kind != 'exact' %}<span class="ml-2 text-xs font-medium text-gray-400">{{ kinds[item.kind] }}</span>{% endif %}
                             <h3 class="text-xl font-bold text-gray-800">{{ item.song }}</h3>
                         </div>
-                        <div class="w-full md:w-auto">
-                            <audio controls preload="none" class="w-full" src="{{ item.clip }}">
-                                Tu navegador no soporta audio.
-                            </audio>
+                        <div class="w-full md:w-40 shrink-0">
+                            <button type="button" data-state="idle" aria-label="Escuchar: {{ item.song }}, {{ item.time }}"
+                                class="play-btn btn-celeste w-full text-white font-bold px-5 py-3 rounded-xl shadow-md">
+                                <span class="play-label">▶ Escuchar</span><span class="play-progress" aria-hidden="true"></span>
+                            </button>
+                            <audio preload="none" src="{{ item.clip }}"></audio>
                         </div>
                     </div>
                     <p class="lyric text-gray-700 text-lg italic">
@@ -199,15 +207,54 @@
         });
     });
 
+    // Play button: drives the card's <audio> (no controls, so hidden). The label follows the
+    // audio's own events, so it also shows plays started elsewhere (other occurrences, ¿No coincide?).
+    const PLAY_LABELS = { idle: '▶ Escuchar', loading: 'Cargando…', playing: '❚❚ Pausa', error: '↻ Reintentar' };
+
+    function playIn(card, url) {
+        const audio = card.querySelector('audio');
+        if (url) audio.src = url;
+        else if (audio.error) audio.load();          // a failed source isn't fetched again by play()
+        document.querySelectorAll('.audio-card audio').forEach(a => { if (a !== audio) a.pause(); });
+        // AbortError = a new src replaced this one before it started: not a failure
+        audio.play().catch(err => { if (err.name !== 'AbortError') setPlayState(card, 'error'); });
+    }
+
+    function setPlayState(card, state) {
+        const btn = card.querySelector('.play-btn');
+        btn.dataset.state = state;
+        btn.setAttribute('aria-busy', state === 'loading');
+        btn.querySelector('.play-label').textContent = PLAY_LABELS[state];
+        btn.setAttribute('aria-label', btn.getAttribute('aria-label').replace(/^\w+/, state === 'playing' ? 'Pausar' : 'Escuchar'));
+    }
+
+    document.querySelectorAll('.audio-card').forEach(card => {
+        const audio = card.querySelector('audio'), bar = card.querySelector('.play-progress');
+        const progress = () => {
+            bar.style.transform = `scaleX(${audio.duration ? audio.currentTime / audio.duration : 0})`;
+            if (!audio.paused) requestAnimationFrame(progress);
+        };
+        // Decide by the button's state, not audio.paused: after a failed load Firefox and WebKit
+        // leave paused false, and the tap must retry, not pause
+        const btn = card.querySelector('.play-btn');
+        btn.addEventListener('click', () => ['playing', 'loading'].includes(btn.dataset.state) ? audio.pause() : playIn(card));
+        audio.addEventListener('play', () => setPlayState(card, 'loading'));
+        audio.addEventListener('waiting', () => setPlayState(card, 'loading'));
+        audio.addEventListener('playing', () => { setPlayState(card, 'playing'); progress(); });
+        // Chromium fires pause right after error: keep showing the error
+        audio.addEventListener('pause', () => setPlayState(card, audio.error ? 'error' : 'idle'));
+        audio.addEventListener('emptied', () => { setPlayState(card, 'idle'); progress(); });
+        audio.addEventListener('error', () => setPlayState(card, 'error'));
+    });
+
     // Other occurrences: play that rendition in the card's player (and share/download it)
     document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {
-        const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
+        const card = btn.closest('.audio-card');
         card.querySelectorAll('.occurrence').forEach(b => b.setAttribute('aria-pressed', b === btn));
         card.dataset.served = btn.dataset.clip;
         selectClip(card, btn.dataset.clip);
         card.dispatchEvent(new Event('clipchange'));
-        audio.src = btn.dataset.clip;
-        audio.play();
+        playIn(card, btn.dataset.clip);
     }));
 
     // ¿No coincide?: report a clip whose timing is wrong, optionally with the corrected times,
@@ -220,7 +267,6 @@
         const panel = card.querySelector('.report-panel');
         if (!panel) return;
         const toggle = card.querySelector('.report-toggle'), status = panel.querySelector('.report-status');
-        const audio = card.querySelector('audio');
         let clip, fixed;     // as served / as adjusted: {song, start, end}
 
         const adjustedUrl = () => `/clip/${encodeURIComponent(clip.song)}/${fixed.start}-${fixed.end}.mp3`;
@@ -256,8 +302,7 @@
         }));
         panel.querySelector('.report-play').addEventListener('click', () => {
             selectClip(card, adjustedUrl());              // and Compartir sends the adjusted clip
-            audio.src = card.dataset.clip;
-            audio.play();
+            playIn(card, card.dataset.clip);
         });
 
         panel.addEventListener('submit', async e => {

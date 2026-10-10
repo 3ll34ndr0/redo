@@ -1,7 +1,7 @@
 name: Build, test and deploy
 
-#   unit-tests ──┬── image: build → smoke test → Trivy (gate) → push to ghcr.io ────┬── deploy
-#                └── browser-tests: the page's JavaScript in Chromium ──────────────┘
+#   unit-tests ──┬── image: build → smoke test → Trivy (gate) → push to ghcr.io ─────────┬── deploy
+#                └── browser-tests: the page's JavaScript in Chromium, Firefox, WebKit ──┘
 # deploy (main only) commits the new image tag into k8s/deployment.yaml, which Argo CD
 # applies. It needs both branches: any failing test means nothing is deployed (an image
 # pushed but not committed to the manifest never runs). Pull requests run the tests only.
@@ -69,12 +69,12 @@ jobs:
 
       - run: pip install -r web/requirements.txt pytest==9.1.1 playwright==1.55.0
 
-      # the browser download (~100 MB) is cached; its system libraries are installed each run
+      # the browser downloads (~300 MB) are cached; their system libraries are installed each run
       - uses: actions/cache@v4
         with:
           path: ~/.cache/ms-playwright
-          key: playwright-1.55.0-chromium
-      - run: python -m playwright install --with-deps chromium
+          key: playwright-1.55.0-chromium-firefox-webkit
+      - run: python -m playwright install --with-deps chromium firefox webkit
 
       - run: python -m pytest tests/browser_checks.py -q
         working-directory: web
