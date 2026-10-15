@@ -135,7 +135,10 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     served = download_href(card)
     assert served.endswith("/9300-10100.mp3")
     card.get_by_text("¿No coincide?").click()
+    card.locator("[data-edge=start][data-delta='-100']").click()
+    assert card.locator(".report-start").inner_text() == "0:09.2"
     card.locator("[data-edge=start][data-delta='-200']").click()
+    card.locator("[data-edge=start][data-delta='100']").click()
     card.locator("[data-edge=end][data-delta='1000']").click()
     assert (card.locator(".report-start").inner_text(), card.locator(".report-end").inner_text()) == ("0:09.1", "0:11.1")
     assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the nudges

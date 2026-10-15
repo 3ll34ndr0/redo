@@ -114,11 +114,11 @@
                                 {% for edge, name in [('start', 'Inicio'), ('end', 'Fin')] %}
                                 <div class="flex flex-wrap items-center gap-1">
                                     <span class="w-12">{{ name }}</span>
-                                    {% for delta, text in [(-1000, '−1s'), (-200, '−0.2s')] %}
+                                    {% for delta, text in [(-1000, '−1s'), (-200, '−0.2s'), (-100, '−0.1s')] %}
                                     <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
                                     {% endfor %}
                                     <span class="report-{{ edge }} w-16 text-center font-mono"></span>
-                                    {% for delta, text in [(200, '+0.2s'), (1000, '+1s')] %}
+                                    {% for delta, text in [(100, '+0.1s'), (200, '+0.2s'), (1000, '+1s')] %}
                                     <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
                                     {% endfor %}
                                 </div>
