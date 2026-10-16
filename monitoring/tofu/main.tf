@@ -12,7 +12,7 @@ data "grafana_data_source" "loki" {
 }
 
 resource "grafana_folder" "extractos" {
-  title = "Extractos"
+  title = "unaudio"
   uid   = "extractos-folder" # dashboards and folders share uids: the dashboard is "extractos"
 }
 

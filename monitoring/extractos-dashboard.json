@@ -37,11 +37,11 @@
       "version": "1.0.0"
     }
   ],
-  "title": "Extractos",
+  "title": "unaudio",
   "uid": "extractos",
-  "description": "https://extractos.marso.ar: searches, clips, shares, performance and errors",
+  "description": "https://unaudio.marso.ar: searches, clips, shares, performance and errors",
   "tags": [
-    "extractos",
+    "unaudio",
     "marso"
   ],
   "timezone": "browser",
@@ -1888,7 +1888,7 @@
   },
   "links": [
     {
-      "title": "Extractos",
+      "title": "unaudio",
       "type": "link",
       "url": "https://extractos.marso.ar",
       "targetBlank": true

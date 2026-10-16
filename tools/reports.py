@@ -34,7 +34,7 @@ from collections import Counter, defaultdict
 from urllib.parse import quote
 
 SSH = os.getenv("EXTRACTOS_SSH", "root@fs2-usw.delightvoip.com")
-SITE = os.getenv("EXTRACTOS_URL", "https://extractos.marso.ar").rstrip("/")
+SITE = os.getenv("UNAUDIO_URL", "https://unaudio.marso.ar").rstrip("/")
 # Runs inside the pod (it has Python): prints every report as JSON
 DUMP = ("import json,sqlite3; c=sqlite3.connect('file:/reports/reports.db?mode=ro',uri=True); "
         "c.row_factory=sqlite3.Row; print(json.dumps([dict(r) for r in c.execute('SELECT * FROM reports ORDER BY id')]))")

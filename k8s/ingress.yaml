@@ -9,13 +9,48 @@ metadata:
 spec:
   ingressClassName: traefik
   rules:
-    - host: extractos.marso.ar
+    - host: unaudio.marso.ar
       http:
         paths:
           - path: /
             pathType: Prefix
             backend:
               service:
+                name: extractos
+                port:
+                  number: 5000
+---
+# The site's old name: every URL (shared clip links included) moves to the same path on
+# unaudio.marso.ar. Traefik answers the redirect itself; the app never sees these requests.
+apiVersion: traefik.io/v1alpha1
+kind: Middleware
+metadata:
+  name: to-unaudio
+  namespace: extractos
+spec:
+  redirectRegex:
+    regex: ^https?://extractos\.marso\.ar/(.*)
+    replacement: https://unaudio.marso.ar/${1}
+    permanent: true
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: extractos-old-name
+  namespace: extractos
+  annotations:
+    traefik.ingress.kubernetes.io/router.entrypoints: web
+    traefik.ingress.kubernetes.io/router.middlewares: extractos-to-unaudio@kubernetescrd
+spec:
+  ingressClassName: traefik
+  rules:
+    - host: extractos.marso.ar
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:                # never reached: the middleware redirects first
                 name: extractos
                 port:
                   number: 5000

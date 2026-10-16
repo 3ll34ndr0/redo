@@ -1,4 +1,4 @@
-# Extractos: the web app only. Songs and the search database are NOT in the image
+# unaudio (formerly Extractos): the web app only. Songs and the search database are NOT in the image
 # (size + copyright): they're mounted read-only from the server (see kubernetes/).
 FROM python:3.12-slim
 

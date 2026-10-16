@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes extractos-dashboard.json: the Grafana dashboard for Extractos.
+"""Writes extractos-dashboard.json: the Grafana dashboard for unaudio (formerly Extractos).
 
 Import it in Grafana (Dashboards → New → Import → upload the JSON) and pick the
 Prometheus and Loki data sources when asked (in Grafana Cloud: grafanacloud-*-prom
@@ -231,10 +231,10 @@ dashboard = {
         {"type": "datasource", "id": "prometheus", "name": "Prometheus", "version": "1.0.0"},
         {"type": "datasource", "id": "loki", "name": "Loki", "version": "1.0.0"},
     ],
-    "title": "Extractos",
+    "title": "unaudio",
     "uid": "extractos",
-    "description": "https://extractos.marso.ar: searches, clips, shares, performance and errors",
-    "tags": ["extractos", "marso"],
+    "description": "https://unaudio.marso.ar: searches, clips, shares, performance and errors",
+    "tags": ["unaudio", "marso"],
     "timezone": "browser",
     "editable": True,
     "refresh": "1m",
@@ -243,7 +243,7 @@ dashboard = {
     "panels": panels,
     "templating": {"list": []},
     "annotations": {"list": []},
-    "links": [{"title": "Extractos", "type": "link", "url": "https://extractos.marso.ar", "targetBlank": True}],
+    "links": [{"title": "unaudio", "type": "link", "url": "https://extractos.marso.ar", "targetBlank": True}],
 }
 
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extractos-dashboard.json")

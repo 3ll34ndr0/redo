@@ -1,6 +1,6 @@
 name: Grafana dashboard (OpenTofu)
 
-# monitoring/tofu manages the Extractos folder + dashboard in Grafana Cloud (leandro.grafana.net).
+# monitoring/tofu manages the unaudio folder + dashboard in Grafana Cloud (leandro.grafana.net).
 # PR: plan only. Push to main: apply. State: Contabo Object Storage bucket opentofu-states
 # (encrypted, locked).
 # Secrets: GRAFANA_SA_TOKEN (service account token, Editor), TOFU_STATE_PASSPHRASE,
