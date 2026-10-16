@@ -16,6 +16,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     DB_PATH=/data/redondos.db \
     LIBRARY_PATH=/data/music \
+    VOCALS_PATH=/data/vocals \
     SNIPPET_CACHE_DIR=/cache
 
 RUN useradd --uid 10001 --no-create-home app

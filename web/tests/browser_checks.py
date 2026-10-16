@@ -7,7 +7,7 @@ real audio (conftest.py makes it); without ffmpeg the clip, download and playbac
 Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer.
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
-the page: suggestions, the "¿No coincide?" panel (nudges, preview, Descargar following the
+the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
 adjustment, sending a report, reset), other occurrences, the play button, phone width,
 JavaScript errors.
 """
@@ -135,13 +135,13 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     served = download_href(card)
     assert served.endswith("/9300-10100.mp3")
     card.get_by_text("¿No coincide?").click()
-    card.locator("[data-edge=start][data-delta='-100']").click()
+    start, end = card.locator(".wave-handle[data-edge=start]"), card.locator(".wave-handle[data-edge=end]")
+    start.press("ArrowLeft")                                            # keyboard: 0.1 s
     assert card.locator(".report-start").inner_text() == "0:09.2"
-    card.locator("[data-edge=start][data-delta='-200']").click()
-    card.locator("[data-edge=start][data-delta='100']").click()
-    card.locator("[data-edge=end][data-delta='1000']").click()
+    start.press("ArrowLeft")
+    end.press("Shift+ArrowRight")                                       # with Shift: 1 s
     assert (card.locator(".report-start").inner_text(), card.locator(".report-end").inner_text()) == ("0:09.1", "0:11.1")
-    assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the nudges
+    assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the edges
     with page.expect_download() as d:
         card.locator(".download").click()
     # 2.0 s adjusted + 0.2 s before + 0.3 s after
@@ -154,7 +154,7 @@ def test_sending_a_report(page, base_url):
     page.goto(base_url + "/search?lyric=sale+sobre")
     card = page.locator(".audio-card").first
     card.get_by_text("¿No coincide?").click()
-    card.locator("[data-edge=start][data-delta='-1000']").click()
+    card.locator(".wave-handle[data-edge=start]").press("Shift+ArrowLeft")
     card.get_by_label("Termina tarde (se escucha otra cosa al final)").check()
     before = len(stored_reports())
     with page.expect_response("**/report") as r:
@@ -173,7 +173,7 @@ def test_reopening_goes_back_to_the_served_clip(page, base_url):
     card = page.locator(".audio-card").first
     toggle = card.get_by_text("¿No coincide?")
     toggle.click()
-    card.locator("[data-edge=start][data-delta='1000']").click()
+    card.locator(".wave-handle[data-edge=start]").press("Shift+ArrowRight")
     # +1 s from 9.3 s would pass the end (10.1 s): capped at 0.2 s before it
     assert download_href(card).endswith("/9900-10100.mp3")
     toggle.click()                                                      # close without sending
@@ -193,6 +193,73 @@ def test_other_occurrence_resets_the_panel(page, base_url):
     assert card.locator(".report-start").inner_text() != first          # now about the second time
     assert download_href(card) == chips.nth(1).get_attribute("data-clip")
 
+
+
+# --- the timing editor's waveform (¿No coincide?)
+
+def wave_pixel(card, at):
+    """RGB of the waveform canvas at a fraction of its width, on the centre line."""
+    return card.locator(".wave-canvas").evaluate("""(c, at) => {
+        const x = Math.floor(c.width * at), y = Math.floor(c.height / 2);
+        return Array.from(c.getContext('2d').getImageData(x, y, 1, 1).data.slice(0, 3));
+    }""", at)
+
+
+def open_editor(page, base_url, query):
+    page.goto(base_url + "/search?lyric=" + query)
+    card = page.locator(".audio-card").first
+    card.get_by_text("¿No coincide?").click()
+    expect(card.locator(".wave")).to_have_attribute("data-state", "ready")
+    return card
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_waveform_inside_coloured_outside_grey(page, base_url):
+    card = open_editor(page, base_url, "sale+sobre")
+    assert card.locator(".wave-source").inner_text() == "solo la voz"          # the vocal stem
+    # window 4.3–15.1 s, selection 9.3–10.1 s: its middle is at 0.537 of the width
+    assert wave_pixel(card, 0.537) == [0x74, 0xAC, 0xDF]
+    assert wave_pixel(card, 0.2) == [0xD1, 0xD5, 0xDB]
+    assert wave_pixel(card, 0.9) == [0xD1, 0xD5, 0xDB]
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_dragging_an_edge_and_tapping_the_waveform(page, base_url):
+    card = open_editor(page, base_url, "sale+sobre")
+    card.locator(".wave").scroll_into_view_if_needed()                # the mouse works in the viewport
+    box = card.locator(".wave").bounding_box()
+    x_at = lambda ms: box["x"] + box["width"] * (ms - 4300) / 10800
+    y = box["y"] + box["height"] / 2
+    # drag the start edge from 9.3 s to about 7.3 s
+    page.mouse.move(x_at(9300), y)
+    page.mouse.down()
+    page.mouse.move(x_at(8300), y, steps=5)
+    page.mouse.move(x_at(7300), y, steps=5)
+    page.mouse.up()
+    start_ms = int(re.search(r"/(\d+)-10100\.mp3$", download_href(card))[1])
+    assert abs(start_ms - 7300) <= 30
+    assert wave_pixel(card, (8300 - 4300) / 10800) == [0x74, 0xAC, 0xDF]   # now inside
+    # a tap past the end brings the end edge there (nearest edge)
+    page.mouse.click(x_at(12000), y)
+    end_ms = int(re.search(r"-(\d+)\.mp3$", download_href(card))[1])
+    assert abs(end_ms - 12000) <= 30
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_voice_preview_plays_the_selection(page, base_url):
+    card = open_editor(page, base_url, "sale+sobre")
+    button = card.locator(".voice-play")
+    button.click()
+    expect(button).to_have_text("■ Parar")
+    expect(card.locator(".wave-playhead")).to_be_visible()
+    expect(button).to_have_text("▶ Escuchar la voz", timeout=5000)             # 0.8 s selection, then stops
+    expect(card.locator(".wave-playhead")).to_be_hidden()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_song_without_vocal_stem_shows_the_song(page, base_url):
+    card = open_editor(page, base_url, "tren+llega+tarde")
+    assert card.locator(".wave-source").inner_text() == "la canción (no hay voz separada)"
 
 # --- play button
 

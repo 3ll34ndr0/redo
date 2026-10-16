@@ -216,6 +216,7 @@ lyrics/eval/out/
 
 # songs re-encoded for the live site (lyrics/reencode.sh): audio, never committed
 lyrics/music_128/
+lyrics/vocals_64/
 CLAUDE.MD
 
 # never committed (size + copyright): songs, stems, search database, clip cache

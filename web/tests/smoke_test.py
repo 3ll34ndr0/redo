@@ -136,6 +136,10 @@ def run_checks(work):
               f"status {status}, {headers.get('Content-Type')}, {len(body)} bytes, {seconds} s")
         status, headers, _ = get(WEB + clip.group(1) + "?name=Prueba.mp3")
         check("download sends an attachment", status == 200 and "attachment" in headers.get("Content-Disposition", ""))
+        # the timing editor's window: no vocals/ folder in this data, so the song itself
+        status, headers, body = get(WEB + "/voice/cancion_de_prueba/4300-15100.wav")
+        check("voice window is a WAV (editor)", status == 200 and body[:4] == b"RIFF"
+              and headers.get("X-Voice-Source") == "song", f"status {status}, {len(body)} bytes")
 
     check("unknown song: 404", get(WEB + "/clip/no_such_song/1000-2000.mp3")[0] == 404)
     check("clip longer than 60 s: 404", get(WEB + "/clip/cancion_de_prueba/0-61000.mp3")[0] == 404)

@@ -32,7 +32,7 @@ REQUEST_SECONDS = Histogram("extractos_http_request_duration_seconds", "HTTP req
 SEARCHES = Counter("extractos_searches_total", "Searches by best result: exact, partial, approx, none", ["outcome"])
 SEARCH_SECONDS = Histogram("extractos_search_duration_seconds", "Time to find and rank results",
                            buckets=(.001, .005, .01, .025, .05, .1, .25, .5, 1))
-CLIPS = Counter("extractos_clips_total", "Clip requests: cached, cut (ffmpeg ran) or failed; and play or download",
+CLIPS = Counter("extractos_clips_total", "Clip requests: cached, cut (ffmpeg ran) or failed; play, download or voice (timing editor)",
                 ["result", "kind"])
 FFMPEG_SECONDS = Histogram("extractos_ffmpeg_duration_seconds", "Time ffmpeg takes to cut a clip",
                            buckets=(.025, .05, .1, .25, .5, 1, 2.5, 5, 10, 30))
@@ -53,7 +53,7 @@ INDEX_LOADED = Gauge("extractos_index_loaded_timestamp_seconds", "When the searc
 for _outcome in ("exact", "partial", "approx", "none"):
     SEARCHES.labels(_outcome)
 for _result in ("cached", "cut", "failed"):
-    for _kind in ("play", "download"):
+    for _kind in ("play", "download", "voice"):
         CLIPS.labels(_result, _kind)
 for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)

@@ -81,6 +81,31 @@ def test_clip_and_download(client):
     assert metric("extractos_clips_total", result="cached", kind="download") >= 1
 
 
+
+@pytest.mark.parametrize("url", [
+    "/voice/no_such_song/1000-2000.wav",           # unknown song
+    "/voice/cancion_de_prueba/3000-2000.wav",      # ends before it starts
+    "/voice/cancion_de_prueba/0-71000.wav",        # longer than the editor's window (70 s)
+])
+def test_bad_voice_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+@pytest.mark.parametrize("song, source", [("cancion_de_prueba", "vocals"), ("otra_cancion", "song")])
+def test_voice_window(client, song, source):
+    """The timing editor's audio: exact length, mono 16 kHz WAV, from the vocal stem if there is one."""
+    import io
+    import wave
+    before = metric("extractos_clips_total", result="cut", kind="voice")
+    r = client.get(f"/voice/{song}/4300-15100.wav")
+    assert r.status_code == 200 and r.mimetype == "audio/wav"
+    assert r.headers["X-Voice-Source"] == source
+    with wave.open(io.BytesIO(r.data)) as w:
+        assert (w.getnchannels(), w.getframerate(), w.getsampwidth()) == (1, 16000, 2)
+        assert abs(w.getnframes() / 16000 - 10.8) < 0.01      # sample 0 is 4.3 s, no padding
+    assert metric("extractos_clips_total", result="cut", kind="voice") == before + 1
+
 def test_share_events(client):
     before = metric("extractos_shares_total", result="shared")
     assert client.post("/event", data=json.dumps({"type": "share", "result": "shared"})).status_code == 204
