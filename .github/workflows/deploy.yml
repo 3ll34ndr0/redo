@@ -2,13 +2,15 @@ name: Build, test and deploy
 
 #   unit-tests ──┬── image: build → smoke test → Trivy (gate) → push to ghcr.io ─────────┬── deploy
 #                └── browser-tests: the page's JavaScript in Chromium, Firefox, WebKit ──┘
-# deploy (main only) commits the new image tag into k8s/deployment.yaml, which Argo CD
-# applies. It needs both branches: any failing test means nothing is deployed (an image
-# pushed but not committed to the manifest never runs). Pull requests run the tests only.
+# deploy commits the new image tag where Argo CD reads it: on main into k8s/deployment.yaml
+# (production, https://unaudio.marso.ar), on development into k8s-dev/kustomization.yaml
+# (staging, https://unaudio-dev.marso.ar). It needs both branches: any failing test means
+# nothing is deployed (an image pushed but not committed to the manifest never runs).
+# Pull requests run the tests only.
 
 on:
   push:
-    branches: [main]
+    branches: [main, development]
     paths: &app-paths
       - "web/app.py"
       - "web/search.py"
@@ -22,6 +24,7 @@ on:
       - ".dockerignore"
       - "k8s/deployment.yaml"
       - "k8s/reports-pvc.yaml"
+      - "k8s/kustomization.yaml"
       - ".github/workflows/deploy.yml"
   pull_request:
     paths: *app-paths
@@ -159,7 +162,7 @@ jobs:
     needs: [image, browser-tests]
     runs-on: ubuntu-latest
     permissions:
-      contents: write                   # commit the new image tag into k8s/deployment.yaml
+      contents: write                   # commit the new image tag into the branch's manifest
     env:
       IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
     steps:
@@ -167,9 +170,15 @@ jobs:
 
       - name: Update deployment manifest
         run: |
-          sed -i "s|image: ghcr.io/.*/redo:.*|image: $IMAGE|" k8s/deployment.yaml
+          if [ "$GITHUB_REF_NAME" = main ]; then
+            file=k8s/deployment.yaml; message="Deploy ${{ github.sha }}"
+            sed -i "s|image: ghcr.io/.*/redo:.*|image: $IMAGE|" "$file"
+          else
+            file=k8s-dev/kustomization.yaml; message="Deploy to staging ${{ github.sha }}"
+            sed -i "s|newTag: .*|newTag: ${{ github.sha }}|" "$file"
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add k8s/deployment.yaml
-          git diff --cached --quiet || git commit -m "Deploy ${{ github.sha }}"
+          git add "$file"
+          git diff --cached --quiet || git commit -m "$message"
           git push

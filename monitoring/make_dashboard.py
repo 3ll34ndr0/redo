@@ -4,17 +4,19 @@
 Import it in Grafana (Dashboards → New → Import → upload the JSON) and pick the
 Prometheus and Loki data sources when asked (in Grafana Cloud: grafanacloud-*-prom
 and grafanacloud-*-logs). Metrics come from web/observability.py, logs are its JSON
-lines collected from namespace extractos.
+lines. Both are filtered by the "namespace" variable: extractos (production) or
+unaudio-dev (staging).
 
 Usage: python3 make_dashboard.py   (from this folder)
 """
 
 import json
 import os
+import re
 
 PROM = {"type": "prometheus", "uid": "${DS_PROMETHEUS}"}
 LOKI = {"type": "loki", "uid": "${DS_LOKI}"}
-LOGS = '{namespace="extractos"}'                  # stream selector for the app's logs
+LOGS = '{namespace="$namespace"}'                 # stream selector for the app's logs
 SEARCHES = LOGS + ' | json | event="search"'
 
 panels = []
@@ -37,8 +39,14 @@ def end_row(h):
     _next["y"] += h
 
 
+def in_namespace(expr):
+    """Every extractos_* series in the expression, limited to the chosen namespace."""
+    return re.sub(r'(extractos_\w+)(?:\{([^}]*)\})?',
+                  lambda m: m[1] + '{namespace="$namespace"' + (',' + m[2] if m[2] else '') + '}', expr)
+
+
 def prom(expr, legend="", instant=False):
-    t = {"datasource": PROM, "expr": expr, "legendFormat": legend, "refId": "A"}
+    t = {"datasource": PROM, "expr": in_namespace(expr), "legendFormat": legend, "refId": "A"}
     if instant:
         t.update(instant=True, range=False)
     return t
@@ -241,9 +249,15 @@ dashboard = {
     "time": {"from": "now-24h", "to": "now"},
     "schemaVersion": 39,
     "panels": panels,
-    "templating": {"list": []},
+    "templating": {"list": [{
+        "name": "namespace", "label": "Site", "type": "custom",
+        "query": "extractos,unaudio-dev",
+        "current": {"text": "extractos", "value": "extractos"},
+        "options": [{"text": v, "value": v, "selected": v == "extractos"} for v in ("extractos", "unaudio-dev")],
+        "description": "extractos = production (unaudio.marso.ar), unaudio-dev = staging",
+    }]},
     "annotations": {"list": []},
-    "links": [{"title": "unaudio", "type": "link", "url": "https://extractos.marso.ar", "targetBlank": True}],
+    "links": [{"title": "unaudio", "type": "link", "url": "https://unaudio.marso.ar", "targetBlank": True}],
 }
 
 out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "extractos-dashboard.json")
