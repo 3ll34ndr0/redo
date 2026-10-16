@@ -438,37 +438,41 @@
         window.addEventListener('resize', () => { if (!panel.hidden) draw(); });
 
         // The selection, from the voice: Web Audio plays exactly start..end of the decoded window
-        voiceBtn.addEventListener('click', async () => {
+        // Doesn't wait for the audio context to start: in a browser without sound output it may
+        // never do, and the button must still come back. The playhead and the stop follow the clock.
+        voiceBtn.addEventListener('click', () => {
             if (voiceBtn.dataset.playing) return stopVoice();
             if (!voice) return;
             stopVoice();
             document.querySelectorAll('.audio-card audio').forEach(a => a.pause());
             const ctx = voiceCtx();
-            await ctx.resume();
+            ctx.resume().catch(() => {});
             const source = ctx.createBufferSource();
             source.buffer = voice;
             source.connect(ctx.destination);
-            const from = fixed.start, t0 = ctx.currentTime;
-            source.start(0, (from - win.start) / 1000, (fixed.end - from) / 1000);
+            const from = fixed.start, length = fixed.end - from, t0 = performance.now();
+            source.start(0, (from - win.start) / 1000, length / 1000);
             voiceBtn.dataset.playing = '1';
             voiceBtn.textContent = '■ Parar';
             playhead.hidden = false;
             let stopped = false;
             const frame = () => {
                 if (stopped) return;
-                playhead.style.left = `${frac(from + (ctx.currentTime - t0) * 1000) * 100}%`;
+                playhead.style.left = `${frac(from + Math.min(performance.now() - t0, length)) * 100}%`;
                 requestAnimationFrame(frame);
             };
             frame();
             const stop = () => {
                 if (stopped) return;
                 stopped = true;
+                clearTimeout(timer);
                 try { source.stop(); } catch (err) { /* already ended */ }
                 delete voiceBtn.dataset.playing;
                 voiceBtn.textContent = '▶ Escuchar la voz';
                 playhead.hidden = true;
                 if (stopVoice === stop) stopVoice = () => {};
             };
+            const timer = setTimeout(stop, length + 300);
             source.onended = stop;
             stopVoice = stop;
         });
