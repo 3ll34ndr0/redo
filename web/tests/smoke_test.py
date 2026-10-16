@@ -114,7 +114,7 @@ def run_checks(work):
         return
 
     status, _, body = get(WEB + "/")
-    check("home page", status == 200 and b"unaudio" in body, str(status))
+    check("home page", status == 200 and b"Un audio" in body, str(status))
 
     status, _, body = get(WEB + "/search?lyric=sale+sobre")
     page = re.sub(r"\s+", " ", body.decode())
