@@ -1,4 +1,5 @@
-# Apply once: kubectl apply -f argocd-application.yaml  (then Argo CD keeps k8s/ in sync)
+# Apply once: kubectl apply -f argocd-application.yaml  (then Argo CD keeps k8s/ in sync: the repo's
+# GitHub webhook wakes it on every push, the automated policy applies it)
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:

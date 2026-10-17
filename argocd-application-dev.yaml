@@ -1,7 +1,8 @@
 # Staging (https://unaudio-dev.marso.ar): the development branch, k8s-dev/ overlay.
-# Apply once: kubectl apply -f argocd-application-dev.yaml  (then sync it by hand in Argo CD,
-# like production). Deleting this app removes staging; its reports volume is kept
-# (Prune=false,Delete=false), delete it by hand if wanted.
+# Apply once: kubectl apply -f argocd-application-dev.yaml  (then Argo CD syncs it on every push,
+# like production: the repo's GitHub webhook wakes it, the automated policy applies it).
+# Deleting this app removes staging; its reports volume is kept (Prune=false,Delete=false),
+# delete it by hand if wanted.
 apiVersion: argoproj.io/v1alpha1
 kind: Application
 metadata:
