@@ -38,7 +38,7 @@ SITE = os.getenv("UNAUDIO_URL", "https://unaudio.marso.ar").rstrip("/")
 # Runs inside the pod (it has Python): prints every report as JSON
 DUMP = ("import json,sqlite3; c=sqlite3.connect('file:/reports/reports.db?mode=ro',uri=True); "
         "c.row_factory=sqlite3.Row; print(json.dumps([dict(r) for r in c.execute('SELECT * FROM reports ORDER BY id')]))")
-PROBLEM_TEXT = {"starts_late": "starts late", "starts_early": "starts early", "ends_early": "ends early",
+PROBLEM_TEXT = {"timing": "badly cut", "starts_late": "starts late", "starts_early": "starts early", "ends_early": "ends early",
                 "ends_late": "ends late", "wrong_phrase": "wrong phrase", "unsure": "not sure what"}
 
 

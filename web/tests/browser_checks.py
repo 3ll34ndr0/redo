@@ -155,7 +155,7 @@ def test_sending_a_report(page, base_url):
     card = page.locator(".audio-card").first
     card.get_by_text("¿No coincide?").click()
     card.locator(".wave-handle[data-edge=start]").press("Shift+ArrowLeft")
-    card.get_by_label("Termina tarde (se escucha otra cosa al final)").check()
+    card.get_by_label("Está mal cortado (empieza o termina antes o después)").check()
     before = len(stored_reports())
     with page.expect_response("**/report") as r:
         card.get_by_role("button", name="Enviar").click()
@@ -165,7 +165,7 @@ def test_sending_a_report(page, base_url):
     rows = stored_reports()
     assert len(rows) == before + 1
     # the clip as served, with the visitor's correction
-    assert rows[-1] == ("cancion_de_prueba", 9300, 10100, "ends_late", 8300, 10100)
+    assert rows[-1] == ("cancion_de_prueba", 9300, 10100, "timing", 8300, 10100)
 
 
 def test_reopening_goes_back_to_the_served_clip(page, base_url):

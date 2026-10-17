@@ -214,7 +214,7 @@ row('Clip reports ("¿No coincide?")')
 add(timeseries("Reports by problem", [prom('sum by (problem) (increase(extractos_clip_reports_total[$__rate_interval]))', "{{problem}}")],
                bars=True, stacked=True,
                description="Visitors saying a clip doesn't match. Details: tools/reports.py export + summary",
-               overrides=[color("starts_late", "orange"), color("starts_early", "yellow"), color("ends_early", "purple"),
+               overrides=[color("timing", "orange"), color("starts_late", "orange"), color("starts_early", "yellow"), color("ends_early", "purple"),
                           color("ends_late", "blue"), color("wrong_phrase", "red"), color("unsure", "text")]),
     8, 9, 0)
 add(top_table("Most reported songs",

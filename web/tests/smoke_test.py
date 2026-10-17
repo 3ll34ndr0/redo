@@ -147,7 +147,7 @@ def run_checks(work):
                                       {"Content-Type": "application/json"})[0] == 204)
     check("/metrics is not on the public port", get(WEB + "/metrics")[0] == 404)
     status, _, body = get(WEB + "/report", json.dumps({
-        "song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late",
+        "song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "timing",
         "fixed_start_ms": 4800, "fixed_end_ms": 7000}).encode(), {"Content-Type": "application/json"})
     check("clip report stored", status == 201 and "id" in json.loads(body or b"{}"), f"{status} {body[:100]!r}")
     check("bad clip report refused", get(WEB + "/report", b'{"song": "x"}', {"Content-Type": "application/json"})[0] == 400)
@@ -159,7 +159,7 @@ def run_checks(work):
     check("metrics count the search", (sample('extractos_searches_total{outcome="exact"}') or 0) >= 1)
     check("metrics count the clip cut", (sample('extractos_clips_total{kind="play",result="cut"}') or 0) >= 1)
     check("metrics count the share", (sample('extractos_shares_total{result="shared"}') or 0) >= 1)
-    check("metrics count the report", (sample('extractos_clip_reports_total{problem="starts_late"}') or 0) >= 1)
+    check("metrics count the report", (sample('extractos_clip_reports_total{problem="timing"}') or 0) >= 1)
     check("metrics see the index", sample("extractos_index_songs") == len(fixture.SONGS))
 
     logs = docker("logs", NAME).stdout.splitlines()

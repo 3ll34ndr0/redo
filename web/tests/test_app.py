@@ -134,22 +134,22 @@ def test_logs_are_json(client, capsys):
 # --- clip reports (¿No coincide?)
 
 def post_report(client, **fields):
-    body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late"}
+    body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "timing"}
     body.update(fields)
     body = {k: v for k, v in body.items() if v is not None}
     return client.post("/report", data=json.dumps(body), content_type="application/json")
 
 
 def test_report_is_stored(client):
-    before = metric("extractos_clip_reports_total", problem="starts_late")
+    before = metric("extractos_clip_reports_total", problem="timing")
     r = post_report(client, fixed_start_ms=4600, fixed_end_ms=7200, query="vamos a brillar",
                     line="Vamos a brillar esta noche")
     assert r.status_code == 201
     stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
-    assert stored["song"] == "cancion_de_prueba" and stored["problem"] == "starts_late"
+    assert stored["song"] == "cancion_de_prueba" and stored["problem"] == "timing"
     assert (stored["start_ms"], stored["end_ms"], stored["fixed_start_ms"], stored["fixed_end_ms"]) == (5000, 7000, 4600, 7200)
     assert stored["line"] == "Vamos a brillar esta noche" and stored["db_version"]
-    assert metric("extractos_clip_reports_total", problem="starts_late") == before + 1
+    assert metric("extractos_clip_reports_total", problem="timing") == before + 1
 
 
 def test_report_without_adjustment(client):
@@ -190,7 +190,7 @@ def test_report_not_json(client):
 def test_card_has_the_report_panel(client):
     page = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
     assert "¿No coincide?" in page and "Escuchar el ajuste" in page
-    assert "Termina tarde" in page and "Quisió... (No sabe, no responde)" in page
+    assert "Está mal cortado" in page and "Quisió... (No sabe, no responde)" in page
 
 
 def test_every_problem_is_offered_accepted_and_counted(client):

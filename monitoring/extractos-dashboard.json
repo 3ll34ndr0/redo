@@ -1678,6 +1678,21 @@
           {
             "matcher": {
               "id": "byName",
+              "options": "timing"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
               "options": "starts_late"
             },
             "properties": [

@@ -34,7 +34,7 @@
 
     <header class="text-center pt-12 pb-8">
         <h1 class="text-4xl font-extrabold text-gray-800 tracking-tight">Un Audio</h1>
-        <p class="text-gray-600 font-medium">Cuando la mejor respuesta es una parte de una canción de Los Redondos:</p>
+        <p class="text-gray-600 font-medium">Cuando la mejor respuesta está en una canción de los Redondos:</p>
     </header>
 
     <main class="max-w-2xl mx-auto px-4">
@@ -106,10 +106,7 @@
                         <form class="report-panel mt-3 p-4 rounded-xl bg-gray-50 text-sm text-gray-700 space-y-3" hidden>
                             <fieldset class="space-y-1">
                                 <legend class="font-bold mb-1">¿Qué pasa con este fragmento?</legend>
-                                {% for value, label in [('starts_late', 'Empieza tarde (se corta el principio)'),
-                                                        ('starts_early', 'Empieza antes (se escucha otra cosa primero)'),
-                                                        ('ends_early', 'Termina antes (se corta el final)'),
-                                                        ('ends_late', 'Termina tarde (se escucha otra cosa al final)'),
+                                {% for value, label in [('timing', 'Está mal cortado (empieza o termina antes o después)'),
                                                         ('wrong_phrase', 'No es esta frase'),
                                                         ('unsure', 'Quisió... (No sabe, no responde)')] %}
                                 <label class="flex items-center gap-2"><input type="radio" name="problem" value="{{ value }}"> {{ label }}</label>
