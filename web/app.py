@@ -18,9 +18,14 @@ app = Flask(__name__)
 # Config
 DB_PATH = os.getenv("DB_PATH", "redondos.db")
 MUSIC_DIR = os.getenv("LIBRARY_PATH")
+# Vocal stems (<song>.mp3, Demucs, same timeline as the songs) for the timing editor; a song
+# without one falls back to the song itself. Default: vocals/ next to the songs' folder.
+VOCALS_DIR = os.getenv("VOCALS_PATH") or os.path.join(os.path.dirname(os.path.abspath(MUSIC_DIR or ".")), "vocals")
 SNIPPET_DIR = os.getenv("SNIPPET_CACHE_DIR") or os.path.join(app.static_folder, "snippets")
 MAX_RESULTS = 10
 MAX_CLIP_S = 60
+MAX_VOICE_S = MAX_CLIP_S + 10         # the editor's window: the clip plus 5 s on each side
+VOICE_RATE = 16000                    # Hz: plenty to see and hear a voice, 32 kB per second
 PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phrase
 CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
 REPORTS_DB = os.getenv("REPORTS_DB", "reports.db")     # clip reports (writable; see reports.py)
@@ -187,6 +192,41 @@ def prune_cache():
 _cuts = {"n": 0}
 
 
+def cut(ffmpeg_args, output_path, song, start_ms, end_ms):
+    """Runs ffmpeg into a temporary file, then moves it to output_path: concurrent requests
+    never see a half-written file. At most MAX_FFMPEG at once. Returns (result, ffmpeg_ms)."""
+    obs.FFMPEG_ACTIVE.inc()
+    try:
+        with ffmpeg_slots, obs.tracer.start_as_current_span("clip.ffmpeg") as span:
+            span.set_attribute("clip.song", song)
+            t0 = time.perf_counter()
+            fd, tmp_path = tempfile.mkstemp(suffix=os.path.splitext(output_path)[1], dir=SNIPPET_DIR)
+            os.close(fd)
+            error = None
+            try:
+                run = subprocess.run(['ffmpeg', '-v', 'error', '-y', *ffmpeg_args, tmp_path],
+                                     stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
+                if run.returncode != 0:
+                    error = f"exit {run.returncode}: {run.stderr.decode(errors='replace')[-500:]}"
+            except subprocess.TimeoutExpired:
+                error = "timeout after 30 s"
+            if error is None:
+                os.replace(tmp_path, output_path)
+            else:
+                os.remove(tmp_path)
+                span.set_status(obs.trace.Status(obs.trace.StatusCode.ERROR, error))
+            seconds = time.perf_counter() - t0
+    finally:
+        obs.FFMPEG_ACTIVE.dec()
+    obs.FFMPEG_SECONDS.observe(seconds)
+    if error:
+        obs.log("clip_failed", level="error", song=song, start_ms=start_ms, end_ms=end_ms, error=error)
+    _cuts["n"] += 1
+    if _cuts["n"] % 50 == 0:
+        prune_cache()
+    return ('cut' if error is None else 'failed'), round(seconds * 1000)
+
+
 @app.route('/clip/<song>/<int:start_ms>-<int:end_ms>.mp3')
 @limiter.limit("60/minute;600/hour")
 @limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
@@ -206,39 +246,9 @@ def clip(song, start_ms, end_ms):
     if not os.path.exists(output_path):
         if not os.path.exists(input_path):
             abort(404)
-        # Fast clip with FFmpeg, into a temporary file: concurrent requests never see a half-written clip
-        obs.FFMPEG_ACTIVE.inc()
-        try:
-            with ffmpeg_slots, obs.tracer.start_as_current_span("clip.ffmpeg") as span:
-                span.set_attribute("clip.song", song)
-                t0 = time.perf_counter()
-                fd, tmp_path = tempfile.mkstemp(suffix='.mp3', dir=SNIPPET_DIR)
-                os.close(fd)
-                error = None
-                try:
-                    run = subprocess.run([
-                        'ffmpeg', '-v', 'error', '-y', '-ss', str(max(0, start - PAD_BEFORE)), '-to', str(end + PAD_AFTER),
-                        '-i', input_path, '-c', 'copy', tmp_path
-                    ], stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
-                    if run.returncode != 0:
-                        error = f"exit {run.returncode}: {run.stderr.decode(errors='replace')[-500:]}"
-                except subprocess.TimeoutExpired:
-                    error = "timeout after 30 s"
-                if error is None:
-                    os.replace(tmp_path, output_path)
-                else:
-                    os.remove(tmp_path)
-                    span.set_status(obs.trace.Status(obs.trace.StatusCode.ERROR, error))
-                seconds = time.perf_counter() - t0
-        finally:
-            obs.FFMPEG_ACTIVE.dec()
-        obs.FFMPEG_SECONDS.observe(seconds)
-        result, ffmpeg_ms = ('cut', round(seconds * 1000)) if error is None else ('failed', round(seconds * 1000))
-        if error:
-            obs.log("clip_failed", level="error", song=song, start_ms=start_ms, end_ms=end_ms, error=error)
-        _cuts["n"] += 1
-        if _cuts["n"] % 50 == 0:
-            prune_cache()
+        # Fast clip: copies the mp3 frames, no re-encoding
+        result, ffmpeg_ms = cut(['-ss', str(max(0, start - PAD_BEFORE)), '-to', str(end + PAD_AFTER),
+                                 '-i', input_path, '-c', 'copy'], output_path, song, start_ms, end_ms)
     obs.CLIPS.labels(result, kind).inc()
     obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind=kind, ffmpeg_ms=ffmpeg_ms)
     if not os.path.exists(output_path):
@@ -248,6 +258,38 @@ def clip(song, start_ms, end_ms):
     if name:
         return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
     return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
+
+
+@app.route('/voice/<song>/<int:start_ms>-<int:end_ms>.wav')
+@limiter.limit("30/minute;300/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def voice(song, start_ms, end_ms):
+    """The singer alone from start to end (ms), no padding, for the timing editor of
+    ¿No coincide?: mono 16-bit WAV (no codec delay: sample 0 is exactly start_ms), from
+    the vocal stem, or from the song if there is none (header X-Voice-Source says which)."""
+    if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_VOICE_S * 1000:
+        abort(404)
+    source, input_path = 'vocals', os.path.join(VOCALS_DIR, f"{song}.mp3")
+    if not os.path.exists(input_path):
+        source, input_path = 'song', os.path.join(MUSIC_DIR, f"{song}.mp3")
+    output_path = os.path.join(SNIPPET_DIR, f"voice_{source}_{song.replace(' ', '_')}_{start_ms}_{end_ms}.wav")
+    result, ffmpeg_ms = 'cached', None
+    if not os.path.exists(output_path):
+        if not os.path.exists(input_path):
+            abort(404)
+        # -ss before -i while re-encoding is exact; bitexact keeps the header a plain 44 bytes
+        result, ffmpeg_ms = cut(['-ss', str(start_ms / 1000), '-t', str((end_ms - start_ms) / 1000), '-i', input_path,
+                                 '-map', '0:a', '-map_metadata', '-1', '-ac', '1', '-ar', str(VOICE_RATE),
+                                 '-c:a', 'pcm_s16le', '-fflags', '+bitexact', '-f', 'wav'],
+                                output_path, song, start_ms, end_ms)
+    obs.CLIPS.labels(result, 'voice').inc()
+    obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind='voice', source=source,
+            ffmpeg_ms=ffmpeg_ms)
+    if not os.path.exists(output_path):
+        abort(500)
+    response = send_file(output_path, mimetype='audio/wav', max_age=CLIP_MAX_AGE)
+    response.headers['X-Voice-Source'] = source
+    return response
 
 
 SHARE_RESULTS = {'shared', 'cancelled', 'failed'}

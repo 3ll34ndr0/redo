@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>unaudio | Buscador</title>
+    <title>Un Audio | Buscador</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>
@@ -22,13 +22,19 @@
                          transform: scaleX(0); transform-origin: left; }
         .lyric mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
         #suggestions li[aria-selected="true"] { background: #74ACDF22; }
+        /* ¿No coincide? timing editor: the edges of the selection over the voice's waveform */
+        .wave-grip { position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; margin-left: -0.5px; background: #1F2937; }
+        .wave-grip::after { content: ''; position: absolute; top: 50%; left: 50%; width: 10px; height: 26px;
+                            margin: -13px 0 0 -5px; border-radius: 4px; background: inherit; }
+        .wave-handle:focus-visible .wave-grip { background: #F6B40E; }
+        .wave[data-state="loading"] .wave-canvas { opacity: .4; }
     </style>
 </head>
 <body class="bg-argentina min-h-screen pb-20">
 
     <header class="text-center pt-12 pb-8">
-        <h1 class="text-4xl font-extrabold text-gray-800 tracking-tight">unaudio</h1>
-        <p class="text-gray-600 font-medium">Fragmentos de la música de los Redondos</p>
+        <h1 class="text-4xl font-extrabold text-gray-800 tracking-tight">Un Audio</h1>
+        <p class="text-gray-600 font-medium">Cuando la mejor respuesta está en una canción de los Redondos:</p>
     </header>
 
     <main class="max-w-2xl mx-auto px-4">
@@ -100,10 +106,7 @@
                         <form class="report-panel mt-3 p-4 rounded-xl bg-gray-50 text-sm text-gray-700 space-y-3" hidden>
                             <fieldset class="space-y-1">
                                 <legend class="font-bold mb-1">¿Qué pasa con este fragmento?</legend>
-                                {% for value, label in [('starts_late', 'Empieza tarde (se corta el principio)'),
-                                                        ('starts_early', 'Empieza antes (se escucha otra cosa primero)'),
-                                                        ('ends_early', 'Termina antes (se corta el final)'),
-                                                        ('ends_late', 'Termina tarde (se escucha otra cosa al final)'),
+                                {% for value, label in [('timing', 'Está mal cortado (empieza o termina antes o después)'),
                                                         ('wrong_phrase', 'No es esta frase'),
                                                         ('unsure', 'Quisió... (No sabe, no responde)')] %}
                                 <label class="flex items-center gap-2"><input type="radio" name="problem" value="{{ value }}"> {{ label }}</label>
@@ -111,19 +114,24 @@
                             </fieldset>
                             <div class="space-y-2">
                                 <p class="font-bold">Ajustá y escuchá <span class="font-normal text-gray-500">(opcional)</span></p>
-                                {% for edge, name in [('start', 'Inicio'), ('end', 'Fin')] %}
-                                <div class="flex flex-wrap items-center gap-1">
-                                    <span class="w-12">{{ name }}</span>
-                                    {% for delta, text in [(-1000, '−1s'), (-200, '−0.2s'), (-100, '−0.1s')] %}
-                                    <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
+                                <p class="text-xs text-gray-500">Arrastrá los bordes hasta donde empieza y termina la frase (o tocá la onda). Se ve y se escucha <span class="wave-source">solo la voz</span>.</p>
+                                <div class="wave relative h-24 rounded-lg bg-white border border-gray-200 select-none touch-none" data-state="idle">
+                                    <canvas class="wave-canvas absolute inset-0 w-full h-full"></canvas>
+                                    <div class="wave-playhead absolute top-0 bottom-0 w-px bg-gray-800 pointer-events-none" hidden></div>
+                                    {% for edge, name in [('start', 'Inicio'), ('end', 'Fin')] %}
+                                    <div class="wave-handle absolute top-0 bottom-0 -ml-3 w-6 cursor-ew-resize focus:outline-none" data-edge="{{ edge }}"
+                                        role="slider" tabindex="0" aria-label="{{ name }} del fragmento"><span class="wave-grip"></span></div>
                                     {% endfor %}
-                                    <span class="report-{{ edge }} w-16 text-center font-mono"></span>
-                                    {% for delta, text in [(100, '+0.1s'), (200, '+0.2s'), (1000, '+1s')] %}
-                                    <button type="button" data-edge="{{ edge }}" data-delta="{{ delta }}" class="px-2 py-1 rounded-lg border border-gray-300 bg-white">{{ text }}</button>
-                                    {% endfor %}
+                                    <span class="wave-status absolute inset-0 flex items-center justify-center text-xs text-gray-400 pointer-events-none"></span>
                                 </div>
-                                {% endfor %}
-                                <button type="button" class="report-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el ajuste</button>
+                                <div class="flex justify-between font-mono text-xs text-gray-600">
+                                    <span>Inicio <span class="report-start"></span></span>
+                                    <span>Fin <span class="report-end"></span></span>
+                                </div>
+                                <div class="flex flex-wrap gap-2">
+                                    <button type="button" class="voice-play px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-600 font-bold">▶ Escuchar la voz</button>
+                                    <button type="button" class="report-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el ajuste</button>
+                                </div>
                             </div>
                             <div class="flex items-center gap-3">
                                 <button type="submit" class="btn-celeste text-white font-bold px-4 py-2 rounded-xl">Enviar</button>
@@ -257,51 +265,227 @@
         playIn(card, btn.dataset.clip);
     }));
 
-    // ¿No coincide?: report a clip whose timing is wrong, optionally with the corrected times,
-    // which the visitor can hear before sending (the clip URL takes any start-end in ms)
+    // ¿No coincide?: report a clip whose timing is wrong, optionally with corrected times. The
+    // visitor sets them on the singer's waveform (/voice: the vocal stem around the clip) by
+    // dragging the edges; inside them the waveform keeps its colour, outside it's greyed.
+    // "Escuchar la voz" plays the selection from that voice, "Escuchar el ajuste" the real clip.
     const CLIP_URL = /\/clip\/([^/]+)\/(\d+)-(\d+)\.mp3/;
-    const MIN_MS = 200, MAX_MS = 60000;
+    const MIN_MS = 200, MAX_MS = 60000, MARGIN_MS = 5000, SNAP_MS = 10;
+    const COLOURS = { inside: '#74ACDF', outside: '#D1D5DB', served: '#9CA3AF' };
     const clock = ms => `${Math.floor(ms / 60000)}:${(ms % 60000 / 1000).toFixed(1).padStart(4, '0')}`;
+    const clamp = (x, lo, hi) => Math.min(Math.max(x, lo), hi);
+
+    // One Web Audio context for the page (decoding works before any tap; playing resumes it)
+    let audioCtx = null, stopVoice = () => {};
+    const voiceCtx = () => audioCtx || (audioCtx = new (window.AudioContext || window.webkitAudioContext)());
+    // the card's player and the voice preview never sound together
+    document.querySelectorAll('.audio-card audio').forEach(a => a.addEventListener('play', () => stopVoice()));
 
     document.querySelectorAll('.audio-card').forEach(card => {
         const panel = card.querySelector('.report-panel');
         if (!panel) return;
         const toggle = card.querySelector('.report-toggle'), status = panel.querySelector('.report-status');
-        let clip, fixed;     // as served / as adjusted: {song, start, end}
+        const wave = panel.querySelector('.wave'), canvas = wave.querySelector('canvas');
+        const playhead = wave.querySelector('.wave-playhead'), waveStatus = wave.querySelector('.wave-status');
+        const voiceBtn = panel.querySelector('.voice-play');
+        const handles = { start: wave.querySelector('[data-edge=start]'), end: wave.querySelector('[data-edge=end]') };
+        let clip, fixed;        // as served / as adjusted: {song, start, end} in ms
+        let win;                // the waveform's window: {start, end} in ms
+        let voice = null, peaks = null, loading = 0, dragging = null;
 
         const adjustedUrl = () => `/clip/${encodeURIComponent(clip.song)}/${fixed.start}-${fixed.end}.mp3`;
+        const frac = ms => (ms - win.start) / (win.end - win.start);
 
         function reset() {
+            stopVoice();
             // back to the clip as served (a previous adjustment may still be the current clip)
             if (card.dataset.clip !== card.dataset.served) selectClip(card, card.dataset.served, false);
             const m = card.dataset.served.match(CLIP_URL);
             clip = { song: decodeURIComponent(m[1]), start: +m[2], end: +m[3] };
             fixed = { start: clip.start, end: clip.end };
+            win = { start: Math.max(0, clip.start - MARGIN_MS), end: clip.end + MARGIN_MS };
             panel.reset();
             status.textContent = '';
+            loadVoice();
             show();
         }
+
+        async function loadVoice() {
+            const mine = ++loading;
+            voice = peaks = null;
+            wave.dataset.state = 'loading';
+            waveStatus.textContent = 'Cargando la voz…';
+            try {
+                const r = await fetch(`/voice/${encodeURIComponent(clip.song)}/${win.start}-${win.end}.wav`);
+                if (!r.ok) throw new Error(r.status);
+                const solo = r.headers.get('X-Voice-Source') !== 'song';
+                const data = await r.arrayBuffer();
+                const buffer = await new Promise((ok, fail) => voiceCtx().decodeAudioData(data, ok, fail));
+                if (mine !== loading) return;               // another clip was chosen meanwhile
+                voice = buffer;
+                win.end = Math.min(win.end, win.start + Math.round(buffer.duration * 1000));   // the song may end sooner
+                panel.querySelector('.wave-source').textContent = solo ? 'solo la voz' : 'la canción (no hay voz separada)';
+                wave.dataset.state = 'ready';
+                waveStatus.textContent = '';
+            } catch (err) {
+                if (mine !== loading) return;
+                wave.dataset.state = 'error';                // the edges still work, without the picture
+                waveStatus.textContent = 'No se pudo cargar la voz';
+            }
+            show();
+        }
+
+        // Loudest sample per pixel column, scaled to the loudest column (computed once per width)
+        function columns(width) {
+            if (peaks && peaks.length === width) return peaks;
+            const data = voice.getChannelData(0), per = data.length / width;
+            peaks = new Float32Array(width);
+            for (let x = 0; x < width; x++) {
+                let max = 0;
+                for (let i = Math.floor(x * per), end = Math.floor((x + 1) * per); i < end; i++) {
+                    const v = Math.abs(data[i]);
+                    if (v > max) max = v;
+                }
+                peaks[x] = max;
+            }
+            const top = Math.max(...peaks) || 1;
+            peaks.forEach((v, x) => { peaks[x] = v / top; });
+            return peaks;
+        }
+
+        function draw() {
+            const w = canvas.clientWidth, h = canvas.clientHeight;
+            if (!w) return;                                  // panel hidden
+            const dpr = window.devicePixelRatio || 1;
+            canvas.width = Math.round(w * dpr);
+            canvas.height = Math.round(h * dpr);
+            const g = canvas.getContext('2d');
+            g.scale(dpr, dpr);
+            const x0 = frac(fixed.start) * w, x1 = frac(fixed.end) * w, mid = h / 2;
+            const bars = voice ? columns(Math.round(w)) : null;
+            for (let x = 0; x < w; x++) {
+                g.fillStyle = x + 0.5 >= x0 && x + 0.5 <= x1 ? COLOURS.inside : COLOURS.outside;
+                const half = bars ? Math.max(0.5, bars[x] * (mid - 4)) : 0.5;
+                g.fillRect(x, mid - half, 1, half * 2);
+            }
+            // where the clip was, as served
+            g.strokeStyle = COLOURS.served;
+            g.setLineDash([3, 3]);
+            for (const ms of [clip.start, clip.end]) {
+                const x = Math.round(frac(ms) * w) + 0.5;
+                g.beginPath(); g.moveTo(x, 0); g.lineTo(x, h); g.stroke();
+            }
+        }
+
         function show() {
             panel.querySelector('.report-start').textContent = clock(fixed.start);
             panel.querySelector('.report-end').textContent = clock(fixed.end);
+            for (const edge of ['start', 'end']) {
+                const handle = handles[edge];
+                handle.style.left = `${frac(fixed[edge]) * 100}%`;
+                handle.setAttribute('aria-valuemin', win.start);
+                handle.setAttribute('aria-valuemax', win.end);
+                handle.setAttribute('aria-valuenow', fixed[edge]);
+                handle.setAttribute('aria-valuetext', clock(fixed[edge]));
+            }
+            draw();
         }
+
+        // Moves one edge, keeping the selection inside the window, at least MIN_MS and at most MAX_MS long
+        function move(edge, ms) {
+            ms = Math.round(ms / SNAP_MS) * SNAP_MS;
+            if (edge === 'start') fixed.start = clamp(ms, Math.max(win.start, fixed.end - MAX_MS), fixed.end - MIN_MS);
+            else fixed.end = clamp(ms, fixed.start + MIN_MS, Math.min(win.end, fixed.start + MAX_MS));
+            show();
+        }
+        function done() {
+            stopVoice();
+            selectClip(card, adjustedUrl(), false);         // Descargar gives what the edges say
+        }
+        const msAt = e => {
+            const box = wave.getBoundingClientRect();
+            return win.start + clamp((e.clientX - box.left) / box.width, 0, 1) * (win.end - win.start);
+        };
+
+        // Drag an edge, or tap/drag anywhere on the waveform to bring the nearest edge there
+        wave.addEventListener('pointerdown', e => {
+            if (e.button > 0) return;
+            const handle = e.target.closest('.wave-handle'), at = msAt(e);
+            dragging = handle ? handle.dataset.edge
+                : Math.abs(at - fixed.start) <= Math.abs(at - fixed.end) ? 'start' : 'end';
+            wave.setPointerCapture(e.pointerId);
+            handles[dragging].focus({ preventScroll: true });
+            if (!handle) move(dragging, at);
+            e.preventDefault();
+        });
+        wave.addEventListener('pointermove', e => { if (dragging) move(dragging, msAt(e)); });
+        const release = () => { if (dragging) { dragging = null; done(); } };
+        wave.addEventListener('pointerup', release);
+        wave.addEventListener('pointercancel', release);
+
+        // Keyboard: arrows move the focused edge 0.1 s, with Shift 1 s
+        Object.entries(handles).forEach(([edge, handle]) => handle.addEventListener('keydown', e => {
+            const sign = { ArrowLeft: -1, ArrowDown: -1, ArrowRight: 1, ArrowUp: 1 }[e.key];
+            if (!sign) return;
+            e.preventDefault();
+            move(edge, fixed[edge] + sign * (e.shiftKey ? 1000 : 100));
+            done();
+        }));
+
+        window.addEventListener('resize', () => { if (!panel.hidden) draw(); });
+
+        // The selection, from the voice: Web Audio plays exactly start..end of the decoded window
+        // Doesn't wait for the audio context to start: in a browser without sound output it may
+        // never do, and the button must still come back. The playhead and the stop follow the clock.
+        voiceBtn.addEventListener('click', () => {
+            if (voiceBtn.dataset.playing) return stopVoice();
+            if (!voice) return;
+            stopVoice();
+            document.querySelectorAll('.audio-card audio').forEach(a => a.pause());
+            const ctx = voiceCtx();
+            ctx.resume().catch(() => {});
+            const source = ctx.createBufferSource();
+            source.buffer = voice;
+            source.connect(ctx.destination);
+            const from = fixed.start, length = fixed.end - from, t0 = performance.now();
+            source.start(0, (from - win.start) / 1000, length / 1000);
+            voiceBtn.dataset.playing = '1';
+            voiceBtn.textContent = '■ Parar';
+            playhead.hidden = false;
+            let stopped = false;
+            const frame = () => {
+                if (stopped) return;
+                playhead.style.left = `${frac(from + Math.min(performance.now() - t0, length)) * 100}%`;
+                requestAnimationFrame(frame);
+            };
+            frame();
+            const stop = () => {
+                if (stopped) return;
+                stopped = true;
+                clearTimeout(timer);
+                try { source.stop(); } catch (err) { /* already ended */ }
+                delete voiceBtn.dataset.playing;
+                voiceBtn.textContent = '▶ Escuchar la voz';
+                playhead.hidden = true;
+                if (stopVoice === stop) stopVoice = () => {};
+            };
+            const timer = setTimeout(stop, length + 300);
+            source.onended = stop;
+            stopVoice = stop;
+        });
+
         toggle.addEventListener('click', () => {
             const open = panel.hidden;
-            if (open) reset();
             panel.hidden = !open;
             toggle.setAttribute('aria-expanded', open);
+            if (open) reset();                               // after showing it: the canvas needs its size
+            else stopVoice();
         });
         card.addEventListener('clipchange', () => { if (!panel.hidden) reset(); });
 
-        panel.querySelectorAll('[data-edge]').forEach(b => b.addEventListener('click', () => {
-            const d = +b.dataset.delta;
-            if (b.dataset.edge === 'start') fixed.start = Math.min(Math.max(0, fixed.start + d), fixed.end - MIN_MS);
-            else fixed.end = Math.min(Math.max(fixed.start + MIN_MS, fixed.end + d), fixed.start + MAX_MS);
-            show();
-            selectClip(card, adjustedUrl(), false);     // Descargar gives what the times say
-        }));
         panel.querySelector('.report-play').addEventListener('click', () => {
-            selectClip(card, adjustedUrl());              // and Compartir sends the adjusted clip
+            stopVoice();
+            selectClip(card, adjustedUrl());                 // and Compartir sends the adjusted clip
             playIn(card, card.dataset.clip);
         });
 

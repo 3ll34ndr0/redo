@@ -1,0 +1,19 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: extractos
+  namespace: extractos            # production's, before the overlay moves it to unaudio-dev
+  annotations:
+    traefik.ingress.kubernetes.io/router.middlewares: unaudio-dev-noindex@kubernetescrd
+spec:
+  rules:
+    - host: unaudio-dev.marso.ar
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: extractos
+                port:
+                  number: 5000

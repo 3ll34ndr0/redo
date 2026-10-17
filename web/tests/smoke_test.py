@@ -114,7 +114,7 @@ def run_checks(work):
         return
 
     status, _, body = get(WEB + "/")
-    check("home page", status == 200 and b"unaudio" in body, str(status))
+    check("home page", status == 200 and b"Un Audio" in body, str(status))
 
     status, _, body = get(WEB + "/search?lyric=sale+sobre")
     page = re.sub(r"\s+", " ", body.decode())
@@ -136,6 +136,10 @@ def run_checks(work):
               f"status {status}, {headers.get('Content-Type')}, {len(body)} bytes, {seconds} s")
         status, headers, _ = get(WEB + clip.group(1) + "?name=Prueba.mp3")
         check("download sends an attachment", status == 200 and "attachment" in headers.get("Content-Disposition", ""))
+        # the timing editor's window: no vocals/ folder in this data, so the song itself
+        status, headers, body = get(WEB + "/voice/cancion_de_prueba/4300-15100.wav")
+        check("voice window is a WAV (editor)", status == 200 and body[:4] == b"RIFF"
+              and headers.get("X-Voice-Source") == "song", f"status {status}, {len(body)} bytes")
 
     check("unknown song: 404", get(WEB + "/clip/no_such_song/1000-2000.mp3")[0] == 404)
     check("clip longer than 60 s: 404", get(WEB + "/clip/cancion_de_prueba/0-61000.mp3")[0] == 404)
@@ -143,7 +147,7 @@ def run_checks(work):
                                       {"Content-Type": "application/json"})[0] == 204)
     check("/metrics is not on the public port", get(WEB + "/metrics")[0] == 404)
     status, _, body = get(WEB + "/report", json.dumps({
-        "song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late",
+        "song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "timing",
         "fixed_start_ms": 4800, "fixed_end_ms": 7000}).encode(), {"Content-Type": "application/json"})
     check("clip report stored", status == 201 and "id" in json.loads(body or b"{}"), f"{status} {body[:100]!r}")
     check("bad clip report refused", get(WEB + "/report", b'{"song": "x"}', {"Content-Type": "application/json"})[0] == 400)
@@ -155,7 +159,7 @@ def run_checks(work):
     check("metrics count the search", (sample('extractos_searches_total{outcome="exact"}') or 0) >= 1)
     check("metrics count the clip cut", (sample('extractos_clips_total{kind="play",result="cut"}') or 0) >= 1)
     check("metrics count the share", (sample('extractos_shares_total{result="shared"}') or 0) >= 1)
-    check("metrics count the report", (sample('extractos_clip_reports_total{problem="starts_late"}') or 0) >= 1)
+    check("metrics count the report", (sample('extractos_clip_reports_total{problem="timing"}') or 0) >= 1)
     check("metrics see the index", sample("extractos_index_songs") == len(fixture.SONGS))
 
     logs = docker("logs", NAME).stdout.splitlines()

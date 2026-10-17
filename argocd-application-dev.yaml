@@ -1,0 +1,24 @@
+# Staging (https://unaudio-dev.marso.ar): the development branch, k8s-dev/ overlay.
+# Apply once: kubectl apply -f argocd-application-dev.yaml  (then sync it by hand in Argo CD,
+# like production). Deleting this app removes staging; its reports volume is kept
+# (Prune=false,Delete=false), delete it by hand if wanted.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: unaudio-dev
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/3ll34ndr0/redo.git   # public repo: no credentials
+    targetRevision: development
+    path: k8s-dev
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: unaudio-dev
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

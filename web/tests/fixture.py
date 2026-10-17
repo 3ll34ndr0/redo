@@ -29,6 +29,7 @@ SONGS = {
         "To-to-todo vuelve a empezar",
     ],
 }
+VOCALS_SONG = "cancion_de_prueba"   # the only song given a vocal stem (tests/conftest.py)
 SONG_SECONDS = 60        # length of the generated audio per song (all timings fit in it)
 WORD_S, GAP_S, START_S = 0.4, 1.5, 5.0
 

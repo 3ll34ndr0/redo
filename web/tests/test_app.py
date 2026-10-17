@@ -81,6 +81,31 @@ def test_clip_and_download(client):
     assert metric("extractos_clips_total", result="cached", kind="download") >= 1
 
 
+
+@pytest.mark.parametrize("url", [
+    "/voice/no_such_song/1000-2000.wav",           # unknown song
+    "/voice/cancion_de_prueba/3000-2000.wav",      # ends before it starts
+    "/voice/cancion_de_prueba/0-71000.wav",        # longer than the editor's window (70 s)
+])
+def test_bad_voice_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+@pytest.mark.parametrize("song, source", [("cancion_de_prueba", "vocals"), ("otra_cancion", "song")])
+def test_voice_window(client, song, source):
+    """The timing editor's audio: exact length, mono 16 kHz WAV, from the vocal stem if there is one."""
+    import io
+    import wave
+    before = metric("extractos_clips_total", result="cut", kind="voice")
+    r = client.get(f"/voice/{song}/4300-15100.wav")
+    assert r.status_code == 200 and r.mimetype == "audio/wav"
+    assert r.headers["X-Voice-Source"] == source
+    with wave.open(io.BytesIO(r.data)) as w:
+        assert (w.getnchannels(), w.getframerate(), w.getsampwidth()) == (1, 16000, 2)
+        assert abs(w.getnframes() / 16000 - 10.8) < 0.01      # sample 0 is 4.3 s, no padding
+    assert metric("extractos_clips_total", result="cut", kind="voice") == before + 1
+
 def test_share_events(client):
     before = metric("extractos_shares_total", result="shared")
     assert client.post("/event", data=json.dumps({"type": "share", "result": "shared"})).status_code == 204
@@ -109,22 +134,22 @@ def test_logs_are_json(client, capsys):
 # --- clip reports (¿No coincide?)
 
 def post_report(client, **fields):
-    body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "starts_late"}
+    body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "timing"}
     body.update(fields)
     body = {k: v for k, v in body.items() if v is not None}
     return client.post("/report", data=json.dumps(body), content_type="application/json")
 
 
 def test_report_is_stored(client):
-    before = metric("extractos_clip_reports_total", problem="starts_late")
+    before = metric("extractos_clip_reports_total", problem="timing")
     r = post_report(client, fixed_start_ms=4600, fixed_end_ms=7200, query="vamos a brillar",
                     line="Vamos a brillar esta noche")
     assert r.status_code == 201
     stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
-    assert stored["song"] == "cancion_de_prueba" and stored["problem"] == "starts_late"
+    assert stored["song"] == "cancion_de_prueba" and stored["problem"] == "timing"
     assert (stored["start_ms"], stored["end_ms"], stored["fixed_start_ms"], stored["fixed_end_ms"]) == (5000, 7000, 4600, 7200)
     assert stored["line"] == "Vamos a brillar esta noche" and stored["db_version"]
-    assert metric("extractos_clip_reports_total", problem="starts_late") == before + 1
+    assert metric("extractos_clip_reports_total", problem="timing") == before + 1
 
 
 def test_report_without_adjustment(client):
@@ -165,7 +190,7 @@ def test_report_not_json(client):
 def test_card_has_the_report_panel(client):
     page = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
     assert "¿No coincide?" in page and "Escuchar el ajuste" in page
-    assert "Termina tarde" in page and "Quisió... (No sabe, no responde)" in page
+    assert "Está mal cortado" in page and "Quisió... (No sabe, no responde)" in page
 
 
 def test_every_problem_is_offered_accepted_and_counted(client):
