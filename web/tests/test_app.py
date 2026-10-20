@@ -139,6 +139,7 @@ def no_provisional_fixes():
     yield
     app_module.reports.set_status([r["id"] for r in app_module.reports.applied()], "revoked")
     app_module._index["checked"] = 0.0
+    app_module._auto_applied.clear()
 
 
 def post_report(client, **fields):
@@ -297,3 +298,32 @@ def test_old_reports_database_gets_the_new_columns(tmp_path):
     old = store.all()[0]
     assert old["status"] is None and old["first_tok"] is None       # reviewed by hand already: never applied
     assert store.applied() == []
+
+
+def test_kill_switch(client, monkeypatch):
+    post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    assert clip_of(client, "sale+sobre") == "9000-10100"
+    monkeypatch.setattr(app_module, "AUTO_APPLY", False)
+    r = post_report(client, start_ms=9000, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10500)
+    assert r.get_json()["provisional"] is False                 # new reports wait for a review
+    app_module._index["checked"] = 0.0
+    assert clip_of(client, "sale+sobre") == "9300-10100"        # and the stored ones stop being applied
+
+
+def test_a_far_move_waits_for_a_review(client):
+    r = post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=4200, fixed_end_ms=10100)
+    assert r.get_json()["provisional"] is False
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+
+
+def test_provisional_fixes_per_visitor_per_day(client, monkeypatch):
+    monkeypatch.setattr(app_module, "AUTO_APPLY_PER_DAY", 2)
+    you, other = {"CF-Connecting-IP": "203.0.113.1"}, {"CF-Connecting-IP": "203.0.113.2"}
+    lines = [(5000, 7000), (8500, 10900), (12400, 14400), (15900, 17900)]      # the fixture's first four lines
+
+    def send(clip, headers):
+        body = {"song": "cancion_de_prueba", "start_ms": clip[0], "end_ms": clip[1], "problem": "timing",
+                "fixed_start_ms": clip[0] - 100, "fixed_end_ms": clip[1]}
+        return client.post("/report", headers=headers, data=json.dumps(body), content_type="application/json").get_json()
+    assert [send(c, you)["provisional"] for c in lines[:3]] == [True, True, False]
+    assert send(lines[3], other)["provisional"] is True        # someone else still can

@@ -17,6 +17,8 @@ on:
       - "web/textnorm.py"
       - "web/observability.py"
       - "web/reports.py"
+      - "web/fixes.py"
+      - "tools/reports.py"
       - "web/requirements.txt"
       - "web/templates/**"
       - "web/tests/**"

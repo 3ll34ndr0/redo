@@ -44,6 +44,10 @@ spec:
               value: "300"
             - name: REPORTS_DB            # clip reports (¿No coincide?), on reports-pvc.yaml
               value: /reports/reports.db
+            # Timing reports applied at once until reviewed (provisional fixes, web/reports.py).
+            # Off here until tried on staging (k8s-dev turns it on). "0" also stops applying stored ones.
+            - name: AUTO_APPLY_REPORTS
+              value: "0"
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

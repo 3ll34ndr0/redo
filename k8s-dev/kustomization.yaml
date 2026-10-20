@@ -38,3 +38,5 @@ patches:
                 env:
                   - name: OTEL_SERVICE_NAME
                     value: unaudio-dev
+                  - name: AUTO_APPLY_REPORTS      # provisional fixes: tried here first
+                    value: "1"

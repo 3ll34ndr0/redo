@@ -31,6 +31,11 @@ PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phras
 CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
 REPORTS_DB = os.getenv("REPORTS_DB", "reports.db")     # clip reports (writable; see reports.py)
 REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often reviews reach the index
+# Timing reports applied at once (provisional fixes, see reports.py). AUTO_APPLY_REPORTS=0 turns it
+# off: new reports wait for a review and the provisional ones already stored stop being applied.
+AUTO_APPLY = os.getenv("AUTO_APPLY_REPORTS", "1") != "0"
+AUTO_APPLY_MAX_SHIFT_MS = 5000        # an edge moved more than this waits for a review (the editor shows ±5 s)
+AUTO_APPLY_PER_DAY = int(os.getenv("AUTO_APPLY_PER_DAY", "5"))    # provisional fixes per visitor per day
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
 
@@ -99,7 +104,8 @@ def get_index():
         base_changed = _index["mtime"] != mtime
         if base_changed:
             _index["rows"], _index["baked"] = load_base()
-        reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]] if reports else []
+        reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]
+                        and (AUTO_APPLY or r["status"] == "accepted")] if reports else []
         _index["checked"] = now
         if base_changed or reports_rows != _index["fixes"]:
             rows, applied, problems = with_fixes(_index["rows"], reports_rows)
@@ -390,8 +396,8 @@ def report():
     if words:
         row.update(first_tok=words[0].tok, last_tok=words[-1].tok, first_word=words[0].orig, last_word=words[-1].orig)
     # A timing correction is applied at once (provisional) until someone reviews it
-    provisional = bool(words) and row['problem'] == 'timing' and fixed_start is not None \
-        and (fixed_start, fixed_end) != (start_ms, end_ms)
+    auto_apply = auto_apply_decision(row, words)
+    provisional = auto_apply == 'applied'
     if provisional:
         row['status'] = 'provisional'
     report_id = reports.add(row)
@@ -400,8 +406,36 @@ def report():
     obs.CLIP_REPORTS.labels(row['problem']).inc()
     obs.log("clip_report", id=report_id, song=song, problem=row['problem'], start_ms=start_ms, end_ms=end_ms,
             shift_start_ms=None if fixed_start is None else fixed_start - start_ms,
-            shift_end_ms=None if fixed_end is None else fixed_end - end_ms, provisional=provisional)
+            shift_end_ms=None if fixed_end is None else fixed_end - end_ms, auto_apply=auto_apply)
     return jsonify(id=report_id, provisional=provisional), 201
+
+
+# Provisional fixes made per visitor today: {(visitor, day): n}, in memory like the rate limits
+_auto_applied = {}
+_auto_applied_lock = threading.Lock()
+
+
+def auto_apply_decision(row, words):
+    """Whether a report becomes a provisional fix: 'applied', or why not (logged)."""
+    if row['problem'] != 'timing' or row['fixed_start_ms'] is None:
+        return 'not_timing'
+    if (row['fixed_start_ms'], row['fixed_end_ms']) == (row['start_ms'], row['end_ms']):
+        return 'unchanged'
+    if not words:
+        return 'words_not_found'
+    if not AUTO_APPLY:
+        return 'off'
+    if max(abs(row['fixed_start_ms'] - row['start_ms']), abs(row['fixed_end_ms'] - row['end_ms'])) > AUTO_APPLY_MAX_SHIFT_MS:
+        return 'too_far'
+    day = time.strftime("%Y-%m-%d", time.gmtime())
+    key = (client_ip(), day)
+    with _auto_applied_lock:
+        for k in [k for k in _auto_applied if k[1] != day]:
+            del _auto_applied[k]
+        if _auto_applied.get(key, 0) >= AUTO_APPLY_PER_DAY:
+            return 'visitor_limit'
+        _auto_applied[key] = _auto_applied.get(key, 0) + 1
+    return 'applied'
 
 
 def phrase_words(song, start_ms, end_ms):
