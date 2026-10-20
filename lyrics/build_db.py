@@ -11,7 +11,8 @@ Reads a word alignment ({song: [[word, start, end], ...]}) and writes SQLite:
   alignment came from (text/sung/<song>.txt or text/corpus), so the app can show
   the matching line; NULL when that file no longer matches the alignment.
 - Timing corrections from visitors' reports (text/timing_fixes.json, written by
-  `tools/reports.py review`) are applied on top of the alignment: see apply_fixes.
+  `tools/reports.py review`) are applied on top of the alignment (web/fixes.py);
+  fixes(report) lists the reports applied, so the app stops applying them itself.
 - redondos_search: the older FTS5 table of 1..6-word windows, kept so older
   versions of the app keep working.
 
@@ -24,14 +25,13 @@ import json
 import os
 import re
 import sqlite3
-import statistics
 import sys
-from collections import defaultdict
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, "..", "web"))
 sys.path.insert(0, os.path.join(HERE, "eval"))
-import textnorm  # noqa: E402  (shared with the app)
+import fixes as fixes_lib  # noqa: E402  (shared with the app)
+import textnorm  # noqa: E402
 from common import FIXES, SUNG, lyrics_path  # noqa: E402
 
 FIXES = os.getenv("FIXES", FIXES)
@@ -76,92 +76,23 @@ def line_numbers(song, words):
     return None
 
 
-MIN_WORD_S = 0.02     # shortest word a fix can produce (a clip needs start < end)
-
-
-def spread(times, toks, a, b):
-    """Place words evenly, in order, between a and b."""
-    if b - a < MIN_WORD_S * len(toks):
-        a = b - MIN_WORD_S * len(toks) if toks else a
-    d = (b - a) / len(toks)
-    for k, t in enumerate(toks):
-        times[t] = [a + k * d, a + (k + 1) * d]
-
-
-def fit_span(times, toks, start, end):
-    """Make a phrase (words toks, in order) start at `start` and end at `end`.
-
-    Words sung inside the new span keep their times (cut to the span); words left
-    outside it (placed before the start or after the end) are spread evenly in the gap
-    between the span's edge and the nearest word inside. E.g. nine "sí" of which the
-    aligner squeezed three before the real start and put three over music 8 s later.
-    """
-    start = times[toks[0]][0] if start is None else start
-    end = times[toks[-1]][1] if end is None else end
-    if start >= end:
-        return False
-    inside = [t for t in toks if times[t][1] > start and times[t][0] < end]
-    if not inside:
-        spread(times, toks, start, end)
-        return True
-    for t in inside:
-        times[t] = [max(times[t][0], start), min(times[t][1], end)]
-    before = [t for t in toks if t < inside[0]]
-    after = [t for t in toks if t > inside[-1]]
-    if before:
-        spread(times, before, start, times[inside[0]][0])
-    else:
-        times[inside[0]][0] = start
-    if after:
-        spread(times, after, times[inside[-1]][1], end)
-    else:
-        times[inside[-1]][1] = end
-    return True
-
-
 def apply_fixes(data, fixes):
-    """Apply hand corrections to the alignment; returns {song: [(tok, word, start, end), ...]}.
+    """Apply hand corrections to the alignment (web/fixes.py); returns
+    ({song: [(tok, word, start, end), ...]}, [applied fix]).
 
-    Each fix names a run of aligned words by index (first..last, = `tok` in the DB) and
-    checks they're still the same words (first_word/last_word), so a fix made before a
-    re-alignment or a lyrics edit is skipped with a warning instead of moving the wrong word.
-    - "delete": the words are dropped (aligned where nothing is sung). Their `tok` numbers
-      stay, so later fixes still point at the right words.
-    - "adjust": the phrase first..last gets a new start and/or end (fit_span). Several fixes
-      of the same phrase: the median.
+    Deleted words are dropped but their `tok` numbers stay, so later fixes still point
+    at the right words.
     """
-    times = {song: {tok: [s, e] for tok, (_, s, e) in enumerate(words)} for song, words in data.items()}
-    deleted, spans, applied, problems = set(), defaultdict(lambda: ([], [])), 0, []
-    for f in fixes:
-        words = data.get(f["song"])
-        ok = (words is not None and 0 <= f["first"] <= f["last"] < len(words)
-              and words[f["first"]][0] == f["first_word"] and words[f["last"]][0] == f["last_word"])
-        if not ok:
-            problems.append(f"{f['song']} {f['first']}-{f['last']} ({f['report']}): words changed since the fix")
-            continue
-        applied += 1
-        if f["action"] == "delete":
-            deleted.update((f["song"], t) for t in range(f["first"], f["last"] + 1))
-        else:
-            starts, ends = spans[(f["song"], f["first"], f["last"])]
-            if "start" in f:
-                starts.append(f["start"])
-            if "end" in f:
-                ends.append(f["end"])
-    for (song, first, last), (starts, ends) in sorted(spans.items()):
-        toks = [t for t in range(first, last + 1) if (song, t) not in deleted]
-        start = statistics.median(starts) if starts else None
-        end = statistics.median(ends) if ends else None
-        if toks and not fit_span(times[song], toks, start, end):
-            problems.append(f"{song} {first}-{last}: corrected span {start}-{end} is empty, not applied")
+    words = {song: {tok: tuple(w) for tok, w in enumerate(ws)} for song, ws in data.items()}
+    times, deleted, applied, problems = fixes_lib.apply(words, fixes)
     out = {song: [(tok, w, round(times[song][tok][0], 3), round(times[song][tok][1], 3))
-                  for tok, (w, _, _) in enumerate(words) if (song, tok) not in deleted]
-           for song, words in data.items()}
+                  for tok, (w, _, _) in enumerate(ws) if (song, tok) not in deleted]
+           for song, ws in data.items()}
     if fixes:
-        print(f"timing fixes: {applied} applied, {len(deleted)} words deleted, {len(problems)} problems")
+        print(f"timing fixes: {len(applied)} applied, {len(deleted)} words deleted, {len(problems)} problems")
         for msg in problems:
             print(f"   problem: {msg}")
-    return out
+    return out, applied
 
 
 def main():
@@ -171,7 +102,7 @@ def main():
     if os.path.exists(FIXES):
         with open(FIXES, encoding="utf-8") as f:
             fixes = json.load(f)
-    fixed = apply_fixes(data, fixes)
+    fixed, applied = apply_fixes(data, fixes)
     tmp = DB + ".tmp"
     if os.path.exists(tmp):
         os.remove(tmp)
@@ -192,6 +123,9 @@ def main():
                 i += 1
         n_words += i
     conn.execute("CREATE INDEX words_w ON words (w)")
+    # Reports whose correction is in this database: the app stops applying them itself
+    conn.execute("CREATE TABLE fixes (report TEXT PRIMARY KEY)")
+    conn.executemany("INSERT OR IGNORE INTO fixes VALUES (?)", [(f["report"],) for f in applied])
 
     conn.execute("CREATE VIRTUAL TABLE redondos_search USING fts5(song, lyric, start UNINDEXED, end UNINDEXED)")
     rows = 0

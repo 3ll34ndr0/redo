@@ -10,6 +10,7 @@ import time
 import os
 
 import observability as obs
+import fixes
 from reports import PROBLEMS, ReportStore
 from search import Index
 
@@ -29,6 +30,7 @@ VOICE_RATE = 16000                    # Hz: plenty to see and hear a voice, 32 k
 PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phrase
 CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
 REPORTS_DB = os.getenv("REPORTS_DB", "reports.db")     # clip reports (writable; see reports.py)
+REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often reviews reach the index
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
 
@@ -51,28 +53,63 @@ if not os.path.exists(SNIPPET_DIR):
 
 obs.init(app, SNIPPET_DIR)      # metrics port, JSON logs, traces (see observability.py)
 
-# Search index over every sung word of every song (a few thousand rows), loaded
-# once and reloaded when the database file changes.
-_index = {"mtime": None, "index": None}
+# Search index over every sung word of every song (a few thousand rows), loaded once
+# and rebuilt when the database file changes or when the provisional timing fixes from
+# visitors' reports change (checked every REPORTS_RECHECK_S, and right after a report).
+_index = {"mtime": None, "rows": None, "baked": set(), "fixes": None, "checked": 0.0, "index": None}
+_index_lock = threading.Lock()
+
+
+def load_base():
+    """The search database: its rows and the reports already baked into it (fixes table)."""
+    with obs.tracer.start_as_current_span("index.load"):
+        # read-only: on the server the database sits on a read-only mount
+        with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
+            try:
+                rows = conn.execute("SELECT song, w, start, end, line, tok, orig FROM words ORDER BY song, i").fetchall()
+            except sqlite3.OperationalError:     # index built before line numbers: no lines shown
+                rows = conn.execute("SELECT song, w, start, end, NULL, i, w FROM words ORDER BY song, i").fetchall()
+            try:
+                baked = {r for (r,) in conn.execute("SELECT report FROM fixes")}
+            except sqlite3.OperationalError:     # built before the fixes table
+                baked = set()
+    return rows, baked
+
+
+def with_fixes(rows, reports_rows):
+    """rows with the reports' adjustments applied (web/fixes.py). Returns (rows, applied, problems)."""
+    if not reports_rows:
+        return rows, [], []
+    words = {}
+    for song, _, start, end, _, tok, orig in rows:
+        words.setdefault(song, {})[tok] = (orig, start, end)
+    times, _, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
+    out = [(song, w, round(times[song][tok][0], 3), round(times[song][tok][1], 3), line, tok, orig)
+           for song, w, _, _, line, tok, orig in rows]
+    return out, applied, problems
 
 
 def get_index():
+    now = time.monotonic()
     mtime = os.path.getmtime(DB_PATH)
-    if _index["mtime"] != mtime:
+    if _index["mtime"] == mtime and now - _index["checked"] < REPORTS_RECHECK_S:
+        return _index["index"]
+    with _index_lock:
         t0 = time.perf_counter()
-        with obs.tracer.start_as_current_span("index.load"):
-            # read-only: on the server the database sits on a read-only mount
-            with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
-                try:
-                    rows = conn.execute("SELECT song, w, start, end, line, tok, orig FROM words ORDER BY song, i").fetchall()
-                except sqlite3.OperationalError:     # index built before line numbers: no lines shown
-                    rows = conn.execute("SELECT song, w, start, end, NULL, i, w FROM words ORDER BY song, i").fetchall()
+        base_changed = _index["mtime"] != mtime
+        if base_changed:
+            _index["rows"], _index["baked"] = load_base()
+        reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]] if reports else []
+        _index["checked"] = now
+        if base_changed or reports_rows != _index["fixes"]:
+            rows, applied, problems = with_fixes(_index["rows"], reports_rows)
             ix = Index(rows)
-        _index.update(mtime=mtime, index=ix)
-        obs.INDEX_SONGS.set(len(ix.songs))
-        obs.INDEX_WORDS.set(len(rows))
-        obs.INDEX_LOADED.set_to_current_time()
-        obs.log("index_loaded", songs=len(ix.songs), words=len(rows), duration_ms=round((time.perf_counter() - t0) * 1000))
+            _index.update(mtime=mtime, fixes=reports_rows, index=ix)
+            obs.INDEX_SONGS.set(len(ix.songs))
+            obs.INDEX_WORDS.set(len(rows))
+            obs.INDEX_LOADED.set_to_current_time()
+            obs.log("index_loaded", songs=len(ix.songs), words=len(rows), provisional_fixes=len(applied),
+                    fix_problems=problems or None, duration_ms=round((time.perf_counter() - t0) * 1000))
     return _index["index"]
 
 
@@ -95,20 +132,20 @@ def clip_url(song, start, end):
     return url_for('clip', song=song, start_ms=int(start * 1000), end_ms=int(end * 1000))
 
 
-# Load the search index now, while the pod starts (the startup probe waits for it), so
-# /healthz and the first search don't pay for it: ~1 s with the pod's CPU limit.
-try:
-    get_index()
-except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
-    obs.log("index_load_failed", level="error", error=repr(e))
-
-
 # Clip reports need a writable place; without one the site still works, /report answers 503.
 try:
     reports = ReportStore(REPORTS_DB)
 except sqlite3.Error as e:
     reports = None
     obs.log("reports_unavailable", level="error", path=REPORTS_DB, error=repr(e))
+
+
+# Load the search index now, while the pod starts (the startup probe waits for it), so
+# /healthz and the first search don't pay for it: ~1 s with the pod's CPU limit.
+try:
+    get_index()
+except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
+    obs.log("index_load_failed", level="error", error=repr(e))
 
 
 @app.route('/')
@@ -349,12 +386,38 @@ def report():
     row = {'song': song, 'start_ms': start_ms, 'end_ms': end_ms, 'problem': data['problem'],
            'fixed_start_ms': fixed_start, 'fixed_end_ms': fixed_end, 'query': text('query'), 'line': text('line'),
            'db_version': time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(_index["mtime"])) if _index["mtime"] else None}
+    words = phrase_words(song, start_ms, end_ms)
+    if words:
+        row.update(first_tok=words[0].tok, last_tok=words[-1].tok, first_word=words[0].orig, last_word=words[-1].orig)
+    # A timing correction is applied at once (provisional) until someone reviews it
+    provisional = bool(words) and row['problem'] == 'timing' and fixed_start is not None \
+        and (fixed_start, fixed_end) != (start_ms, end_ms)
+    if provisional:
+        row['status'] = 'provisional'
     report_id = reports.add(row)
+    if provisional:
+        _index["checked"] = 0.0     # the next search (the visitor's own, maybe) already has it
     obs.CLIP_REPORTS.labels(row['problem']).inc()
     obs.log("clip_report", id=report_id, song=song, problem=row['problem'], start_ms=start_ms, end_ms=end_ms,
             shift_start_ms=None if fixed_start is None else fixed_start - start_ms,
-            shift_end_ms=None if fixed_end is None else fixed_end - end_ms)
-    return jsonify(id=report_id), 201
+            shift_end_ms=None if fixed_end is None else fixed_end - end_ms, provisional=provisional)
+    return jsonify(id=report_id, provisional=provisional), 201
+
+
+def phrase_words(song, start_ms, end_ms):
+    """The words a served clip was made of ([search.Word], first to last), or None.
+
+    Clip URLs hold int(start * 1000) of the phrase's first word and int(end * 1000) of its
+    last (clip_url), so the served times identify them while the index hasn't changed
+    (±1 ms: float rounding). None for a page from before a database or fix change.
+    """
+    words = get_index().songs[song]
+    for i, w in enumerate(words):
+        if abs(int(w.start * 1000) - start_ms) <= 1:
+            for j in range(i, len(words)):
+                if abs(int(words[j].end * 1000) - end_ms) <= 1:
+                    return words[i:j + 1]
+    return None
 
 
 if __name__ == "__main__":
