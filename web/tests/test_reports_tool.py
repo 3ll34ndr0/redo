@@ -102,3 +102,26 @@ def test_sync_sets_the_statuses_on_the_site(files, tmp_path, monkeypatch, capsys
     capsys.readouterr()
     tool.sync(str(export), str(reviewed))
     assert "nothing to send" in capsys.readouterr().out
+
+
+def test_reports_without_stored_words_get_no_status():
+    # reports from before the words were stored: the site never applies them, nothing to sync
+    old = report(9, first_tok=None, last_tok=None, first_word=None, last_word=None)
+    assert tool.status_after(old, "a") is None and tool.status_after(report(1, "provisional"), "a") == "accepted"
+    decided = {tool.report_key(old): {"decision": "apply the adjustment", "status": "accepted"}}   # recorded before
+    assert tool.status_changes([old], decided) == []
+
+
+@pytest.mark.parametrize("namespace, export, reviewed", [
+    (None, "reports.json", "reports-reviewed.json"),
+    ("extractos", "reports.json", "reports-reviewed.json"),
+    ("unaudio-dev", "reports-unaudio-dev.json", "reports-reviewed-unaudio-dev.json"),
+])
+def test_each_site_has_its_own_files(monkeypatch, namespace, export, reviewed):
+    if namespace:
+        monkeypatch.setenv("EXTRACTOS_NAMESPACE", namespace)
+    else:
+        monkeypatch.delenv("EXTRACTOS_NAMESPACE", raising=False)
+    fresh = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(fresh)
+    assert (fresh.EXPORT, fresh.REVIEWED) == (export, reviewed)

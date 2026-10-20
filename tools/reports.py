@@ -11,6 +11,10 @@
     tools/reports.py pending [reports.json]      provisional fixes (live on the site) not reviewed yet
     tools/reports.py sync [--dry-run]            send the reviews' statuses to the pod (accepted/revoked)
 
+Each site has its own files: production reports.json + reports-reviewed.json, staging
+(EXTRACTOS_NAMESPACE=unaudio-dev) reports-unaudio-dev.json + reports-reviewed-unaudio-dev.json,
+so a sync can't send one site's decisions to the other by default.
+
 Review decisions are kept in reports-reviewed.json next to the export (not in git: notes may
 quote lyrics), keyed by report id + creation time, so a new export only shows new reports.
 
@@ -47,6 +51,9 @@ import fixes  # noqa: E402  (web/fixes.py: the same code as the app and build_db
 
 SSH = os.getenv("EXTRACTOS_SSH", "root@fs2-usw.delightvoip.com")
 NAMESPACE = os.getenv("EXTRACTOS_NAMESPACE", "extractos")
+_SITE_SUFFIX = "" if NAMESPACE == "extractos" else f"-{NAMESPACE}"
+EXPORT = f"reports{_SITE_SUFFIX}.json"                 # default file names, one pair per site
+REVIEWED = f"reports-reviewed{_SITE_SUFFIX}.json"
 SITE = os.getenv("UNAUDIO_URL", "https://unaudio.marso.ar").rstrip("/")
 # Runs inside the pod (it has Python): prints every report as JSON
 DUMP = ("import json,sqlite3; c=sqlite3.connect('file:/reports/reports.db?mode=ro',uri=True); "
@@ -87,6 +94,8 @@ def load(path=None, db=None):
         conn = sqlite3.connect(f"file:{db}?mode=ro", uri=True)
         conn.row_factory = sqlite3.Row
         return [dict(r) for r in conn.execute("SELECT * FROM reports ORDER BY id")]
+    if not os.path.exists(path):
+        sys.exit(f"{path} not found: download the reports first (tools/reports.py export, {NAMESPACE})")
     with open(path, encoding="utf-8") as f:
         return json.load(f)
 
@@ -198,7 +207,10 @@ def report_words(conn, r):
 
 
 def status_after(r, answer):
-    """The report's status once this review reaches the site (sync): None = unchanged."""
+    """The report's status once this review reaches the site (sync): None = unchanged. Only
+    reports with their words stored (first_tok) can be applied by the site: others keep none."""
+    if r.get("first_tok") is None:
+        return None
     if answer == "a":
         return "accepted"
     return "revoked" if r.get("status") in ("provisional", "accepted") else None
@@ -291,7 +303,7 @@ def status_changes(rows, reviewed):
     out = []
     for r in rows:
         want = reviewed.get(report_key(r), {}).get("status")
-        if want and r.get("status") != want:
+        if want and r.get("status") != want and r.get("first_tok") is not None:
             out.append((r, want))
     return out
 
@@ -336,23 +348,23 @@ def main():
     p = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     sub = p.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("export", help="download all reports from the pod")
-    e.add_argument("-o", "--out", default="reports.json")
+    e.add_argument("-o", "--out", default=EXPORT)
     s = sub.add_parser("summary", help="summarize reports per lyric line")
-    s.add_argument("file", nargs="?", default="reports.json")
+    s.add_argument("file", nargs="?", default=EXPORT)
     s.add_argument("--db", help="read a local reports.db instead of an export")
     r = sub.add_parser("review", help="listen to each report's clips and record a decision")
-    r.add_argument("file", nargs="?", default="reports.json")
+    r.add_argument("file", nargs="?", default=EXPORT)
     r.add_argument("--list", action="store_true", help="only print, don't ask")
     r.add_argument("--all", action="store_true", help="include reports already reviewed")
-    r.add_argument("--reviewed", help="decisions file (default: reports-reviewed.json next to the export)")
+    r.add_argument("--reviewed", help=f"decisions file (default: {REVIEWED} next to the export)")
     r.add_argument("--id", type=int, action="append", default=[], help="review this report again (repeatable)")
     r.add_argument("--search-db", default=SEARCH_DB, help="search database to find the clip's words")
     r.add_argument("--fixes", default=FIXES, help="timing corrections file ([a] and [d] write it)")
     for name, help in (("pending", "provisional fixes not reviewed yet"),
                        ("sync", "send the reviews' statuses (accepted/revoked) to the site")):
         c = sub.add_parser(name, help=help)
-        c.add_argument("file", nargs="?", default="reports.json")
-        c.add_argument("--reviewed", help="decisions file (default: reports-reviewed.json next to the export)")
+        c.add_argument("file", nargs="?", default=EXPORT)
+        c.add_argument("--reviewed", help=f"decisions file (default: {REVIEWED} next to the export)")
         if name == "sync":
             c.add_argument("--dry-run", action="store_true", help="only print the changes")
     args = p.parse_args()
@@ -361,7 +373,7 @@ def main():
     elif args.cmd == "summary":
         summary(load(args.file, args.db))
     else:
-        reviewed = args.reviewed or os.path.join(os.path.dirname(os.path.abspath(args.file)), "reports-reviewed.json")
+        reviewed = args.reviewed or os.path.join(os.path.dirname(os.path.abspath(args.file)), REVIEWED)
         if args.cmd == "pending":
             pending(load(args.file), reviewed)
         elif args.cmd == "sync":
