@@ -237,8 +237,8 @@ webno/
 web/static/snippets/
 
 # clip reports exported by tools/reports.py (visitor data)
-reports.json
-reports-reviewed.json
+reports*.json
+reviewed*.json
 
 # Claude Code project notes (local only)
 CLAUDE.md
