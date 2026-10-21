@@ -43,7 +43,10 @@
         .play-btn[data-state="loading"] { cursor: progress; }
         .play-progress { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px; background: #F6B40E;
                          transform: scaleX(0); transform-origin: left; }
-        .lyric mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
+        .stanzas .stanza[data-where="far"] { display: none; }
+        .stanzas.whole .stanza[data-where="far"] { display: block; }
+        .stanzas .stanza[data-where="hit"] { color: #374151; }
+        .lyric mark, .stanzas mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
         #suggestions li[aria-selected="true"] { background: #74ACDF22; }
 {{ wave.styles() }}    </style>
 </head>
@@ -99,6 +102,25 @@
                             {% if marked %}<mark>{{ word }}</mark>{% else %}{{ word }}{% endif %}
                         {%- endfor -%}
                     </p>
+                    {% if item.stanzas %}
+                    <details class="lyrics-context text-sm">
+                        <summary class="cursor-pointer text-xs text-gray-500 underline hover:text-gray-700">Ver la estrofa</summary>
+                        <div class="stanzas mt-3 space-y-3 text-gray-400">
+                            {% for lines, where in item.stanzas %}
+                            <p class="stanza" data-where="{{ where }}">
+                                {%- for line in lines -%}
+                                    {%- if not loop.first %}<br>{% endif -%}
+                                    {%- for word, marked in line %}{% if not loop.first %} {% endif %}{% if marked %}<mark>{{ word }}</mark>{% else %}{{ word }}{% endif %}{% endfor -%}
+                                {%- endfor -%}
+                            </p>
+                            {% endfor %}
+                        </div>
+                        {% if item.stanzas | selectattr(1, 'equalto', 'far') | list %}
+                        <button type="button" class="whole-toggle mt-2 text-xs text-gray-500 underline hover:text-gray-700"
+                            aria-expanded="false">Ver toda la letra</button>
+                        {% endif %}
+                    </details>
+                    {% endif %}
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" hidden
                             class="share btn-celeste text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md">Compartir</button>
@@ -265,6 +287,15 @@
         selectClip(card, btn.dataset.clip);
         card.dispatchEvent(new Event('clipchange'));
         playIn(card, btn.dataset.clip);
+    }));
+
+    // Ver la estrofa (test feature): the stanzas around the clip; "Ver toda la letra" adds the rest
+    document.querySelectorAll('.whole-toggle').forEach(btn => btn.addEventListener('click', () => {
+        const view = btn.closest('.lyrics-context').querySelector('.stanzas');
+        const whole = view.classList.toggle('whole');
+        btn.setAttribute('aria-expanded', whole);
+        btn.textContent = whole ? 'Ver solo la estrofa' : 'Ver toda la letra';
+        if (whole) view.querySelector('.stanza[data-where="hit"]').scrollIntoView({block: 'center'});
     }));
 
     // ¿No coincide?: report a clip whose timing is wrong, optionally with corrected times, set on

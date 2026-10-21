@@ -107,8 +107,10 @@ def levenshtein(a, b, limit=None):
 
 
 class Index:
-    def __init__(self, rows):
-        """rows: (song, w, start, end, line, tok, orig) ordered by song, i."""
+    def __init__(self, rows, stanzas=None):
+        """rows: (song, w, start, end, line, tok, orig) ordered by song, i.
+        stanzas: {song: {line: stanza number}} (words table), None if unknown."""
+        self.stanzas = stanzas or {}
         self.songs = {}
         for song, *word in rows:
             self.songs.setdefault(song, []).append(Word(*word))
@@ -296,3 +298,26 @@ class Index:
 
     def line_text(self, hit):
         return " ".join(w for w, _, _ in self.line_tokens(hit))
+
+    def stanzas_around(self, hit):
+        """Every stanza of the hit's song: [(lines, where)], lines = [[(word, highlighted)]],
+        where = 'hit' (has the hit), 'near' (just before or after it) or 'far'.
+        [] without stanza numbers."""
+        words, numbers = self.songs[hit.song], self.stanzas.get(hit.song)
+        if not numbers or words[hit.i].line not in numbers or words[hit.j].line not in numbers:
+            return []
+        first, last = numbers[words[hit.i].line], numbers[words[hit.j].line]
+        marked = getattr(hit, "matched", None) or set(range(hit.i, hit.j + 1))
+        out = {}            # stanza → {line → [[word, highlighted]]}
+        for k, w in enumerate(words):
+            st = numbers.get(w.line)
+            if st is None:
+                continue
+            line = out.setdefault(st, {}).setdefault(w.line, [])
+            if line and w.tok == words[k - 1].tok:      # same written word ("to-to-todo")
+                line[-1][1] = line[-1][1] or k in marked
+            else:
+                line.append([w.orig, k in marked])
+        where = lambda st: "hit" if first <= st <= last else "near" if first - 1 <= st <= last + 1 else "far"
+        return [([[tuple(t) for t in line] for _, line in sorted(lines.items())], where(st))
+                for st, lines in sorted(out.items())]

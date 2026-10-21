@@ -38,6 +38,10 @@ REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often re
 # off: new reports wait for a review and the provisional ones already stored stop being applied.
 AUTO_APPLY = os.getenv("AUTO_APPLY_REPORTS", "1") != "0"
 AUTO_APPLY_MAX_SHIFT_MS = 5000        # an edge moved more than this waits for a review (the editor shows ±5 s)
+# Test feature: each card can show the stanza before, the hit's stanza and the one after,
+# and from there the whole song, the clip highlighted.
+# On in staging (k8s-dev), off in production until tried.
+STANZA_CONTEXT = os.getenv("STANZA_CONTEXT", "0") == "1"
 AUTO_APPLY_PER_DAY = int(os.getenv("AUTO_APPLY_PER_DAY", "5"))    # provisional fixes per visitor per day
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
@@ -67,12 +71,13 @@ obs.init(app, SNIPPET_DIR)      # metrics port, JSON logs, traces (see observabi
 # Search index over every sung word of every song (a few thousand rows), loaded once
 # and rebuilt when the database file changes or when the provisional timing fixes from
 # visitors' reports change (checked every REPORTS_RECHECK_S, and right after a report).
-_index = {"mtime": None, "rows": None, "baked": set(), "fixes": None, "checked": 0.0, "index": None}
+_index = {"mtime": None, "rows": None, "baked": set(), "stanzas": {}, "fixes": None, "checked": 0.0, "index": None}
 _index_lock = threading.Lock()
 
 
 def load_base():
-    """The search database: its rows and the reports already baked into it (fixes table)."""
+    """The search database: its rows, the reports already baked into it (fixes table) and
+    the stanza of each line ({song: {line: stanza}})."""
     with obs.tracer.start_as_current_span("index.load"):
         # read-only: on the server the database sits on a read-only mount
         with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
@@ -84,7 +89,14 @@ def load_base():
                 baked = {r for (r,) in conn.execute("SELECT report FROM fixes")}
             except sqlite3.OperationalError:     # built before the fixes table
                 baked = set()
-    return rows, baked
+            stanzas = {}
+            try:
+                for song, line, stanza in conn.execute("SELECT DISTINCT song, line, stanza FROM words"
+                                                       " WHERE stanza IS NOT NULL"):
+                    stanzas.setdefault(song, {})[line] = stanza
+            except sqlite3.OperationalError:     # built before stanza numbers: no stanzas shown
+                pass
+    return rows, baked, stanzas
 
 
 def with_fixes(rows, reports_rows):
@@ -109,13 +121,13 @@ def get_index():
         t0 = time.perf_counter()
         base_changed = _index["mtime"] != mtime
         if base_changed:
-            _index["rows"], _index["baked"] = load_base()
+            _index["rows"], _index["baked"], _index["stanzas"] = load_base()
         reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]
                         and (AUTO_APPLY or r["status"] in ("accepted", "deleted"))] if reports else []
         _index["checked"] = now
         if base_changed or reports_rows != _index["fixes"]:
             rows, applied, problems = with_fixes(_index["rows"], reports_rows)
-            ix = Index(rows)
+            ix = Index(rows, _index["stanzas"])
             _index.update(mtime=mtime, fixes=reports_rows, index=ix)
             obs.INDEX_SONGS.set(len(ix.songs))
             obs.INDEX_WORDS.set(len(rows))
@@ -214,6 +226,7 @@ def search():
             'song': title(hit.song),
             'kind': hit.kind,
             'tokens': tokens,
+            'stanzas': ix.stanzas_around(hit) if STANZA_CONTEXT else [],
             'filename': file_name(hit.song, tokens),
             'time': clock(hit.start),
             'clip': clip_url(hit.song, hit.start, hit.end),

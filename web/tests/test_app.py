@@ -33,6 +33,16 @@ def test_search_page_highlights_the_line(client):
     assert 'download="Cancion De Prueba - sale sobre.mp3"' in page
 
 
+def test_stanzas_shown_only_when_turned_on(client, monkeypatch):
+    assert 'class="lyrics-context' not in client.get("/search?lyric=la+luna+sale").get_data(as_text=True)
+    monkeypatch.setattr(app_module, "STANZA_CONTEXT", True)
+    page = re.sub(r"\s+", " ", client.get("/search?lyric=la+luna+sale").get_data(as_text=True))
+    assert "<summary" in page and "Ver la estrofa</summary>" in page
+    assert '<p class="stanza" data-where="far">El pingüino baila, ¡y sueña!</p>' in page
+    assert "<mark>La</mark> <mark>luna</mark> <mark>sale</mark> sobre el puerto" in page
+    assert "Ver toda la letra</button>" in page          # the song has a stanza not shown at first
+
+
 def test_search_without_results(client):
     page = client.get("/search?lyric=xyzzy+qwerty").get_data(as_text=True)
     assert "No se encontraron resultados" in page

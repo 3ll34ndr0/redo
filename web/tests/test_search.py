@@ -3,13 +3,13 @@
 import pytest
 
 import textnorm
-from fixture import rows
+from fixture import rows, stanzas
 from search import Index, levenshtein, sounds
 
 
 @pytest.fixture(scope="module")
 def ix():
-    return Index(rows())
+    return Index(rows(), stanzas())
 
 
 def texts(ix, hits):
@@ -130,6 +130,41 @@ def test_phrase_across_lines_shows_both(ix):
     tokens = ix.line_tokens(hit)
     assert any(new_line for _, _, new_line in tokens)  # "/" between the two lines
     assert tokens[0][0] == "Nadie"
+
+
+def stanza_texts(view):
+    return [(" / ".join(" ".join(w for w, _ in line) for line in lines), where) for lines, where in view]
+
+
+def test_stanzas_around_the_hit(ix):
+    hit = ix.search("nadie duerme")[0]
+    view = ix.stanzas_around(hit)
+    assert stanza_texts(view) == [
+        ("Vamos a brillar esta noche / La luna sale sobre el puerto", "near"),
+        ("Vamos a brillar esta noche / Nadie duerme en la ciudad", "hit"),
+        ("El pingüino baila, ¡y sueña!", "near"),
+    ]
+    assert [w for lines, _ in view for line in lines for w, marked in line if marked] == ["Nadie", "duerme"]
+
+
+def test_stanzas_far_from_the_hit(ix):
+    view = ix.stanzas_around(ix.search("la luna sale")[0])
+    assert [where for _, where in view] == ["hit", "near", "far"]
+
+
+def test_phrase_across_stanzas_marks_both(ix):
+    view = ix.stanzas_around(ix.search("en la ciudad el pinguino")[0])
+    assert [where for _, where in view] == ["near", "hit", "hit"]
+
+
+def test_hyphenated_word_shown_once_in_stanzas(ix):
+    view = ix.stanzas_around(ix.search("todo vuelve")[0])
+    assert stanza_texts(view)[0][0].endswith("To-to-todo vuelve a empezar")
+
+
+def test_no_stanzas_without_numbers():
+    plain = Index(rows())
+    assert plain.stanzas_around(plain.search("nadie duerme")[0]) == []
 
 
 def test_suggestions(ix):
