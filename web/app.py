@@ -9,6 +9,7 @@ import threading
 import time
 import os
 import functools
+import hashlib
 import urllib.parse
 
 import observability as obs
@@ -157,6 +158,19 @@ try:
     get_index()
 except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
     obs.log("index_load_failed", level="error", error=repr(e))
+
+
+@functools.cache
+def _static_version(filename):
+    with open(os.path.join(app.static_folder, filename), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
+
+
+@app.template_global()
+def static_url(filename):
+    """A page's script with its content's hash in the URL (?v=): a new version is a new URL, so
+    neither browsers nor Cloudflare serve an old copy (or a 404 cached before a deploy)."""
+    return url_for('static', filename=filename, v=_static_version(filename))
 
 
 @app.context_processor

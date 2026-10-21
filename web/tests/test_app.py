@@ -360,3 +360,9 @@ def test_every_module_goes_into_the_image():
     for name in modules:
         assert f"web/{name}" in dockerfile, f"{name} isn't copied by the Dockerfile"
         assert f"!web/{name}" in dockerignore, f"{name} isn't let through by .dockerignore"
+
+
+def test_scripts_have_their_version_in_the_url(client):
+    page = client.get("/").get_data(as_text=True)
+    url = re.search(r'src="(/static/wave\.js\?v=[0-9a-f]{12})"', page).group(1)
+    assert client.get(url).status_code == 200

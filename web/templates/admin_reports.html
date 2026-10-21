@@ -105,7 +105,7 @@
         {% endfor %}
     </main>
 
-    <script src="{{ url_for('static', filename='wave.js') }}"></script>
+    <script src="{{ static_url('wave.js') }}"></script>
     <script>
         // One clip at a time: the button that's playing says ■ and stops it on a second tap
         const audio = new Audio();
