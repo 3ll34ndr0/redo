@@ -1,0 +1,88 @@
+name: Cloudflare Access (OpenTofu)
+
+# access/tofu puts the /admin pages of unaudio (production and staging) behind a Cloudflare
+# Access login. PR or push to development: plan only. Push to main: apply. State: Contabo Object
+# Storage bucket opentofu-states, key redo/access.tfstate (encrypted, locked).
+# Secrets: CLOUDFLARE_ACCESS_TOKEN (API token, Access edit permissions, see variables.tf),
+#          UNAUDIO_ADMIN_EMAILS (JSON list, e.g. ["me@example.com"]), TOFU_STATE_PASSPHRASE,
+#          CONTABO_S3_ACCESS_KEY_ID, CONTABO_S3_SECRET_ACCESS_KEY.
+# Repo variables: CLOUDFLARE_ACCOUNT_ID, CONTABO_S3_ENDPOINT.
+
+on:
+  push:
+    branches: [main, development]
+    paths:
+      - "access/**"
+      - ".github/workflows/access.yml"
+  pull_request:
+    paths:
+      - "access/**"
+      - ".github/workflows/access.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: access-tofu
+  cancel-in-progress: false
+
+env:
+  TF_VAR_cloudflare_token: ${{ secrets.CLOUDFLARE_ACCESS_TOKEN }}
+  TF_VAR_admin_emails: ${{ secrets.UNAUDIO_ADMIN_EMAILS }}
+  TF_VAR_account_id: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+  TF_VAR_state_passphrase: ${{ secrets.TOFU_STATE_PASSPHRASE }}
+  AWS_ACCESS_KEY_ID: ${{ secrets.CONTABO_S3_ACCESS_KEY_ID }}
+  AWS_SECRET_ACCESS_KEY: ${{ secrets.CONTABO_S3_SECRET_ACCESS_KEY }}
+  AWS_ENDPOINT_URL_S3: ${{ vars.CONTABO_S3_ENDPOINT }}
+  AWS_DEFAULT_REGION: us-east-1
+  TF_IN_AUTOMATION: "1"
+
+jobs:
+  tofu:
+    # PRs from forks get no secrets: nothing to do there
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: access/tofu
+    steps:
+      - uses: actions/checkout@v5
+
+      # OpenTofu's lock (use_lockfile) needs conditional writes: a second "create only if
+      # missing" upload of the same object must be refused (412). curl signs the S3 requests
+      # (SigV4) and shows the raw HTTP status; the AWS CLI crashed on Contabo's answer.
+      - name: Check the bucket (access, and support for state locking)
+        run: |
+          bucket=opentofu-states
+          key="redo/lock-probe-${GITHUB_RUN_ID}"
+          url="${AWS_ENDPOINT_URL_S3%/}/$bucket/$key"
+          s3() { curl -s -o /dev/null -w '%{http_code}' --aws-sigv4 "aws:amz:${AWS_DEFAULT_REGION}:s3" \
+                   --user "$AWS_ACCESS_KEY_ID:$AWS_SECRET_ACCESS_KEY" "$@" "$url"; }
+          echo "::notice::endpoint: ${AWS_ENDPOINT_URL_S3:-<CONTABO_S3_ENDPOINT variable not set>}"
+          code=$(s3 -X PUT --data probe)
+          if [ "$code" != 200 ]; then
+            echo "::error::cannot write to bucket $bucket: HTTP $code (credentials, endpoint or bucket name)"
+            exit 1
+          fi
+          code=$(s3 -X PUT -H 'If-None-Match: *' --data probe)
+          case "$code" in
+            412) echo "::notice::state locking supported (conditional write refused: HTTP 412)" ;;
+            200) echo "::warning::the bucket ignores conditional writes: OpenTofu's state lock does not work (CI runs still never overlap)" ;;
+            *)   echo "::warning::conditional writes not supported (HTTP $code): OpenTofu's state lock may fail" ;;
+          esac
+          s3 -X DELETE >/dev/null
+
+      - uses: opentofu/setup-opentofu@v2
+        with:
+          tofu_version: 1.13.1
+          tofu_wrapper: false
+
+      - run: tofu init -input=false
+      - run: tofu validate
+      - run: tofu plan -input=false -out=access.tfplan
+
+      - name: Apply
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
+        run: tofu apply -input=false access.tfplan
+
