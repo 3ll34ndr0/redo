@@ -42,5 +42,3 @@ patches:
                     value: https://unaudio-dev.marso.ar
                   - name: AUTO_APPLY_REPORTS      # provisional fixes: tried here first
                     value: "1"
-                  - name: STANZA_CONTEXT          # test feature: stanzas / whole song in each card
-                    value: "1"

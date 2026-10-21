@@ -38,9 +38,8 @@ REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often re
 # off: new reports wait for a review and the provisional ones already stored stop being applied.
 AUTO_APPLY = os.getenv("AUTO_APPLY_REPORTS", "1") != "0"
 AUTO_APPLY_MAX_SHIFT_MS = 5000        # an edge moved more than this waits for a review (the editor shows ±5 s)
-# Test feature: each card can show the stanza before, the hit's stanza and the one after,
+# Each card can show the stanza before, the hit's stanza and the one after,
 # and from there the whole song, the clip highlighted.
-# On in staging (k8s-dev), off in production until tried.
 STANZA_CONTEXT = os.getenv("STANZA_CONTEXT", "0") == "1"
 AUTO_APPLY_PER_DAY = int(os.getenv("AUTO_APPLY_PER_DAY", "5"))    # provisional fixes per visitor per day
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
