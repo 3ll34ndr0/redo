@@ -98,10 +98,13 @@ def report_key(r):
 
 
 def from_report(r):
-    """The "adjust" fix a report asks for (a row of the reports database with its words:
-    first_tok..last_tok), as in timing_fixes.json; only the edges the visitor moved."""
+    """The fix a report asks for (a row of the reports database with its words: first_tok..last_tok),
+    as in timing_fixes.json: "delete" once reviewed so (status deleted), else "adjust" with only
+    the edges the visitor moved."""
     fix = {"report": report_key(r), "song": r["song"], "action": "adjust", "first": r["first_tok"],
            "last": r["last_tok"], "first_word": r["first_word"], "last_word": r["last_word"]}
+    if r.get("status") == "deleted":
+        return dict(fix, action="delete")
     if r["fixed_start_ms"] != r["start_ms"]:
         fix["start"] = r["fixed_start_ms"] / 1000
     if r["fixed_end_ms"] != r["end_ms"]:

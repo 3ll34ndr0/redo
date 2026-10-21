@@ -9,11 +9,12 @@ import threading
 import time
 import os
 import functools
+import urllib.parse
 
 import observability as obs
 import access
 import fixes
-from reports import OLD_PROBLEMS, PROBLEMS, ReportStore
+from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
 
 app = Flask(__name__)
@@ -89,9 +90,9 @@ def with_fixes(rows, reports_rows):
     words = {}
     for song, _, start, end, _, tok, orig in rows:
         words.setdefault(song, {})[tok] = (orig, start, end)
-    times, _, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
+    times, deleted, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
     out = [(song, w, round(times[song][tok][0], 3), round(times[song][tok][1], 3), line, tok, orig)
-           for song, w, _, _, line, tok, orig in rows]
+           for song, w, _, _, line, tok, orig in rows if (song, tok) not in deleted]
     return out, applied, problems
 
 
@@ -106,7 +107,7 @@ def get_index():
         if base_changed:
             _index["rows"], _index["baked"] = load_base()
         reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]
-                        and (AUTO_APPLY or r["status"] == "accepted")] if reports else []
+                        and (AUTO_APPLY or r["status"] in ("accepted", "deleted"))] if reports else []
         _index["checked"] = now
         if base_changed or reports_rows != _index["fixes"]:
             rows, applied, problems = with_fixes(_index["rows"], reports_rows)
@@ -466,7 +467,12 @@ PROBLEM_LABELS = {'timing': 'Está mal cortado', 'wrong_phrase': 'No es esta fra
                   'ends_early': 'Termina antes', 'ends_late': 'Termina tarde'}
 assert set(PROBLEM_LABELS) == set(PROBLEMS) | set(OLD_PROBLEMS)
 STATUS_LABELS = {None: 'Sin revisar', 'provisional': 'Aplicado provisoriamente',
-                 'accepted': 'Aceptado', 'revoked': 'Rechazado'}
+                 'accepted': 'Ajuste aplicado', 'deleted': 'Palabras borradas', 'revoked': 'Revisado'}
+# The admin's choices (reports.DECISIONS), in the order the page shows them
+DECISION_LABELS = {'apply': 'Aplicar el ajuste', 'delete': 'Borrar las palabras', 'lyrics': 'Corregí la letra',
+                   'chorus': 'Agregué el coro', 'leave': 'Algo corrido, dejarlo', 'other': 'Otro arreglo',
+                   'nothing': 'Está bien así'}
+assert set(DECISION_LABELS) == set(DECISIONS)
 PENDING = (None, 'provisional')       # what still needs a review
 
 
@@ -492,8 +498,15 @@ def clock_ms(ms):
 
 def admin_report(r):
     """A stored report as the admin list shows it."""
+    words = r['first_tok'] is not None
+    adjusted = r['fixed_start_ms'] is not None and (r['fixed_start_ms'], r['fixed_end_ms']) != (r['start_ms'], r['end_ms'])
+    # apply needs the words and an adjustment, delete the words; the rest are always possible
+    choices = [(k, v) for k, v in DECISION_LABELS.items() if (k != 'apply' or (words and adjusted)) and (k != 'delete' or words)]
     item = dict(r, title=title(r['song']), problem_label=PROBLEM_LABELS.get(r['problem'], r['problem']),
                 status_label=STATUS_LABELS.get(r['status'], r['status']), pending=r['status'] in PENDING,
+                decision_label=DECISION_LABELS.get(r['decision']), choices=choices,
+                words=f"{r['first_word']} … {r['last_word']}" if words and r['first_tok'] != r['last_tok']
+                      else r['first_word'] if words else None,
                 served=f"{clock_ms(r['start_ms'])} – {clock_ms(r['end_ms'])}",
                 served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']))
     if r['fixed_start_ms'] is not None:
@@ -524,6 +537,42 @@ def admin_reports():
         rows = [r for r in rows if r['status'] in PENDING]
     return render_template('admin_reports.html', reports=[admin_report(r) for r in rows], show=show,
                            song=song, song_title=title(song) if song else None, counts=counts, admin=g.admin)
+
+
+def same_origin():
+    """A change from our own page: JSON (a form on another site can't send it without asking first,
+    and we never allow that: no CORS) and, when the browser says where from, this host."""
+    if not request.is_json:
+        return False
+    origin = request.headers.get('Origin')
+    if origin and urllib.parse.urlsplit(origin).netloc != request.host:
+        return False
+    return request.headers.get('Sec-Fetch-Site', 'same-origin') in ('same-origin', 'none')
+
+
+@app.route('/admin/reports/<int:report_id>/decision', methods=['POST'])
+@admin_only
+def admin_decide(report_id):
+    """Record a review: {"decision": one of reports.DECISIONS, "note": optional}. "apply" and "delete"
+    change the search at once (also in production, where visitors' reports wait for a review)."""
+    if reports is None:
+        abort(503)
+    if not same_origin():
+        abort(403)
+    data = request.get_json(silent=True)
+    report = reports.get(report_id)
+    if report is None:
+        abort(404)
+    decision = data.get('decision') if isinstance(data, dict) else None
+    if decision not in dict(admin_report(report)['choices']):
+        abort(400, "decision not possible for this report")
+    note = str(data.get('note') or '')[:500] or None
+    reports.decide(report_id, decision, note, g.admin)
+    _index["checked"] = 0.0                 # the next search already has it
+    obs.REPORT_REVIEWS.labels(decision).inc()
+    obs.log("report_review", id=report_id, song=report['song'], decision=decision, status=DECISIONS[decision])
+    item = admin_report(reports.get(report_id))
+    return jsonify(status=item['status'], status_label=item['status_label'], decision_label=item['decision_label'])
 
 
 if __name__ == "__main__":

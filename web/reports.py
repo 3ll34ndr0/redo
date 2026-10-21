@@ -37,12 +37,22 @@ CREATE TABLE IF NOT EXISTS reports (
     last_tok       INTEGER,
     first_word     TEXT,               -- ... and the words themselves, to check them before applying
     last_word      TEXT,
-    status         TEXT,               -- provisional | accepted | revoked; NULL: not applied automatically
-    reviewed_at    TEXT                -- UTC, when status left provisional
+    status         TEXT,               -- provisional | accepted | deleted | revoked; NULL: not applied automatically
+    reviewed_at    TEXT,               -- UTC, when status left provisional
+    decision       TEXT,               -- the admin's review (DECISIONS); NULL: not reviewed on the site
+    note           TEXT,               -- ... with an optional note
+    reviewed_by    TEXT                -- ... by whom (the Cloudflare Access email)
 )
 """
-STATUSES = ("provisional", "accepted", "revoked")
-APPLIED = ("provisional", "accepted")    # accepted: applied until the search database includes it
+STATUSES = ("provisional", "accepted", "deleted", "revoked")
+# Applied by the app until the search database includes it: provisional (a visitor's adjustment,
+# not reviewed), accepted (the adjustment, reviewed), deleted (the words removed, reviewed)
+APPLIED = ("provisional", "accepted", "deleted")
+# An admin's review on the site (/admin) and the status it gives the report. Same decisions as
+# tools/reports.py review: apply the adjustment, delete the words (aligned where nothing is
+# sung), or one that changes nothing on the site (fixed elsewhere, or nothing to fix).
+DECISIONS = {"apply": "accepted", "delete": "deleted", "lyrics": "revoked", "chorus": "revoked",
+             "leave": "revoked", "other": "revoked", "nothing": "revoked"}
 
 
 class ReportStore:
@@ -83,6 +93,22 @@ class ReportStore:
             return [dict(r) for r in conn.execute(
                 f"SELECT * FROM reports WHERE status IN ({', '.join('?' * len(APPLIED))}) AND first_tok IS NOT NULL"
                 " ORDER BY id", APPLIED)]
+
+    def get(self, report_id):
+        with closing(self._connect()) as conn:
+            conn.row_factory = sqlite3.Row
+            row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
+            return dict(row) if row else None
+
+    def decide(self, report_id, decision, note, reviewer):
+        """Record an admin's review: the decision, and the status it means (DECISIONS)."""
+        if decision not in DECISIONS:
+            raise ValueError(decision)
+        now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        with self.lock, closing(self._connect()) as conn:
+            conn.execute("UPDATE reports SET decision = ?, note = ?, reviewed_by = ?, status = ?, reviewed_at = ?"
+                         " WHERE id = ?", (decision, note, reviewer, DECISIONS[decision], now, report_id))
+            conn.commit()
 
     def set_status(self, ids, status):
         """Record a review: accepted or revoked (tools/reports.py)."""

@@ -19,7 +19,7 @@ from flask import g, got_request_exception, request
 from opentelemetry import trace
 from prometheus_client import Counter, Gauge, Histogram, start_http_server
 
-from reports import PROBLEMS
+from reports import DECISIONS, PROBLEMS
 
 SERVICE = os.getenv("OTEL_SERVICE_NAME", "extractos")
 tracer = trace.get_tracer(SERVICE)
@@ -40,6 +40,8 @@ FFMPEG_ACTIVE = Gauge("extractos_ffmpeg_in_progress", "Clips being cut or waitin
 RATE_LIMITED = Counter("extractos_rate_limited_total", "Requests refused by the rate limits", ["route"])
 CLIP_REPORTS = Counter("extractos_clip_reports_total", "Clips reported as not matching (¿No coincide?), by problem",
                        ["problem"])
+REPORT_REVIEWS = Counter("extractos_report_reviews_total", "Clip reports reviewed by an admin on the site (/admin), by decision",
+                         ["decision"])
 SHARES = Counter("extractos_shares_total", "Compartir button outcomes reported by the page: shared, cancelled, failed",
                  ["result"])
 CACHE_BYTES = Gauge("extractos_clip_cache_bytes", "Size of the clip cache")
@@ -59,6 +61,8 @@ for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)
 for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
+for _decision in DECISIONS:
+    REPORT_REVIEWS.labels(_decision)
 
 
 def dir_bytes(path):

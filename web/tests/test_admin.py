@@ -10,6 +10,7 @@ import time
 
 import jwt
 import pytest
+from prometheus_client import REGISTRY
 from cryptography.hazmat.primitives import serialization
 
 import access
@@ -100,7 +101,84 @@ def test_report_list(client, report_ids):
 
 def test_report_list_all_and_by_song(client, report_ids):
     page = client.get("/admin/reports?show=all", headers=tokens.headers()).get_data(as_text=True)
-    assert set(report_ids) <= shown(page) and "Aceptado" in page
+    assert set(report_ids) <= shown(page) and "Ajuste aplicado" in page
     page = client.get("/admin/reports?show=all&song=otra_cancion", headers=tokens.headers()).get_data(as_text=True)
     assert report_ids[2] in shown(page) and not {report_ids[0], report_ids[1]} & shown(page)
     assert "Otra Cancion" in page
+
+
+# --- decisions (phase 2): recorded on the site, "apply" and "delete" change the search at once
+
+@pytest.fixture(autouse=True)
+def nothing_applied_after():
+    yield
+    app_module.reports.set_status([r["id"] for r in app_module.reports.applied()], "revoked")
+    app_module._index["checked"] = 0.0
+    app_module._auto_applied.clear()
+
+
+def report(client, **fields):
+    body = {"song": "cancion_de_prueba", "start_ms": 9300, "end_ms": 10100, "problem": "timing"}
+    body.update(fields)
+    r = client.post("/report", data=json.dumps(body), content_type="application/json")
+    assert r.status_code == 201
+    return r.get_json()["id"]
+
+
+def decide(client, report_id, decision, note=None, headers=None, **kwargs):
+    headers = {**tokens.headers(), "Origin": "http://localhost", **(headers or {})}
+    return client.post(f"/admin/reports/{report_id}/decision", headers=headers,
+                       **(kwargs or {"json": {"decision": decision, "note": note}}))
+
+
+def search_page(client, query="sale+sobre"):
+    return client.get("/search?lyric=" + query).get_data(as_text=True)
+
+
+def test_decisions_need_an_admin_and_our_own_page(client):
+    rid = report(client, problem="wrong_phrase")
+    r = client.post(f"/admin/reports/{rid}/decision", json={"decision": "nothing"})
+    assert r.status_code == 404                                              # no token: no admin pages
+    assert decide(client, rid, None, data="decision=nothing",
+                  content_type="application/x-www-form-urlencoded").status_code == 403    # a form from anywhere
+    assert decide(client, rid, "nothing", headers={"Origin": "https://evil.example"}).status_code == 403
+    assert decide(client, rid, "nothing", headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert app_module.reports.get(rid)["decision"] is None
+
+
+def test_impossible_decisions_are_refused(client):
+    rid = report(client, problem="wrong_phrase")                             # no adjustment
+    assert decide(client, rid, "apply").status_code == 400
+    assert decide(client, rid, "made_up").status_code == 400
+    assert decide(client, 999999, "nothing").status_code == 404
+
+
+def test_apply_is_live_even_where_reports_wait_for_a_review(client, monkeypatch):
+    monkeypatch.setattr(app_module, "AUTO_APPLY", False)                     # as in production
+    rid = report(client, fixed_start_ms=9300, fixed_end_ms=10400, line="Sale sobre")
+    assert "/clip/cancion_de_prueba/9300-10100.mp3" in search_page(client)    # waiting for a review
+    before = REGISTRY.get_sample_value("extractos_report_reviews_total", {"decision": "apply"})
+    r = decide(client, rid, "apply", note="se oye bien")
+    assert r.status_code == 200 and r.get_json()["status"] == "accepted"
+    assert "/clip/cancion_de_prueba/9300-10400.mp3" in search_page(client)    # at once
+    stored = app_module.reports.get(rid)
+    assert (stored["decision"], stored["note"], stored["reviewed_by"]) == ("apply", "se oye bien", tokens.EMAIL)
+    assert REGISTRY.get_sample_value("extractos_report_reviews_total", {"decision": "apply"}) == before + 1
+    # reviewed: out of "Por revisar", with the decision shown in "Todos"
+    assert rid not in shown(client.get("/admin/reports", headers=tokens.headers()).get_data(as_text=True))
+    page = client.get("/admin/reports?show=all", headers=tokens.headers()).get_data(as_text=True)
+    assert "Aplicar el ajuste" in page and "se oye bien" in page
+
+
+def test_delete_removes_the_words_from_the_search(client):
+    rid = report(client, problem="wrong_phrase")
+    assert "/clip/cancion_de_prueba/9300-10100.mp3" in search_page(client)
+    assert decide(client, rid, "delete").get_json()["status"] == "deleted"
+    assert "/clip/cancion_de_prueba/9300-10100.mp3" not in search_page(client)
+
+
+def test_other_decisions_take_back_a_provisional_fix(client):
+    rid = report(client, fixed_start_ms=9300, fixed_end_ms=10400)            # applied at once (staging)
+    assert "/clip/cancion_de_prueba/9300-10400.mp3" in search_page(client)
+    assert decide(client, rid, "nothing").get_json()["status"] == "revoked"
+    assert "/clip/cancion_de_prueba/9300-10100.mp3" in search_page(client)

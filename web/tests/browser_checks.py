@@ -336,3 +336,26 @@ def test_phone_width_has_no_sideways_scroll(browser, base_url):
     page.locator(".report-toggle").first.click()
     assert page.evaluate("document.documentElement.scrollWidth") <= 375
     page.close()
+
+
+# --- admin (behind Cloudflare Access: here a token signed by the tests' key, tokens.py)
+
+def test_admin_records_a_decision(page, base_url):
+    import json
+    import tokens
+    body = json.dumps({"song": "otra_cancion", "start_ms": 1000, "end_ms": 2500, "problem": "wrong_phrase",
+                       "line": "Línea para revisar"}).encode()
+    request = urllib.request.Request(base_url + "/report", data=body, headers={"Content-Type": "application/json"})
+    report_id = json.load(urllib.request.urlopen(request))["id"]
+    assert page.goto(base_url + "/admin/reports").status == 404                # no token: no page
+    page.set_extra_http_headers(tokens.headers())
+    page.goto(base_url + "/admin/reports")
+    card = page.locator(f'.report[data-id="{report_id}"]')
+    expect(card).to_contain_text("Línea para revisar")
+    card.locator(".note").fill("no es esta frase, es la siguiente")
+    card.get_by_role("button", name="Está bien así").click()                  # the browser's own fetch
+    expect(card.locator(".status")).to_have_text("Revisado")
+    expect(card.locator(".reviewed")).to_contain_text("Está bien así")
+    with sqlite3.connect(os.environ["REPORTS_DB"]) as conn:
+        assert conn.execute("SELECT decision, note, status FROM reports WHERE id = ?", (report_id,)).fetchone() == \
+            ("nothing", "no es esta frase, es la siguiente", "revoked")
