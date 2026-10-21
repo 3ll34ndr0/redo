@@ -3,7 +3,29 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Un Audio | Buscador</title>
+    <title>{% if query %}“{{ query }}” | Un Audio{% else %}Un Audio | Buscador{% endif %}</title>
+    {# Link previews (WhatsApp, Telegram, Slack, X…): a searched phrase shared as /search?lyric=... shows the phrase #}
+    {% set og_title = ('“' ~ query ~ '” en una canción de los Redondos') if query else 'Un Audio: la frase justa de los Redondos' %}
+    {% set og_description = ('Escuchala en ' ~ results[0].song ~ ', cortada justo donde la cantan.') if results
+        else 'Buscá una frase de Patricio Rey y sus Redonditos de Ricota y escuchá el pedacito exacto de la canción donde la cantan. Para mandarlo como respuesta.' %}
+    {% set og_url = site_url ~ (('/search?lyric=' ~ (query | urlencode)) if query else '/') %}
+    <meta name="description" content="{{ og_description }}">
+    <link rel="canonical" href="{{ og_url }}">
+    <meta property="og:type" content="website">
+    <meta property="og:site_name" content="Un Audio">
+    <meta property="og:locale" content="es_AR">
+    <meta property="og:title" content="{{ og_title }}">
+    <meta property="og:description" content="{{ og_description }}">
+    <meta property="og:url" content="{{ og_url }}">
+    <meta property="og:image" content="{{ site_url }}/static/og.png">
+    <meta property="og:image:type" content="image/png">
+    <meta property="og:image:width" content="1200">
+    <meta property="og:image:height" content="630">
+    <meta property="og:image:alt" content="Un Audio: buscá una frase y escuchá el pedazo de la canción donde la cantan">
+    <meta name="twitter:card" content="summary_large_image">
+    <meta name="twitter:title" content="{{ og_title }}">
+    <meta name="twitter:description" content="{{ og_description }}">
+    <meta name="twitter:image" content="{{ site_url }}/static/og.png">
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
     <style>

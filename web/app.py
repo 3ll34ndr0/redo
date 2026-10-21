@@ -40,6 +40,9 @@ AUTO_APPLY_MAX_SHIFT_MS = 5000        # an edge moved more than this waits for a
 AUTO_APPLY_PER_DAY = int(os.getenv("AUTO_APPLY_PER_DAY", "5"))    # provisional fixes per visitor per day
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
+# The site's public address, for the link preview tags (og:url, og:image must be absolute). Behind
+# Cloudflare → Traefik the request arrives over http, so it's set in k8s/; locally the request's own.
+SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
 
 
 def client_ip():
@@ -154,6 +157,11 @@ try:
     get_index()
 except Exception as e:      # /healthz will report it (500) and the probes keep the pod out
     obs.log("index_load_failed", level="error", error=repr(e))
+
+
+@app.context_processor
+def site_url():
+    return {'site_url': SITE_URL or request.url_root.rstrip("/")}
 
 
 @app.route('/')
