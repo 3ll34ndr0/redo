@@ -1,4 +1,4 @@
-from flask import Flask, abort, jsonify, render_template, request, send_file, url_for
+from flask import Flask, abort, g, jsonify, make_response, redirect, render_template, request, send_file, url_for
 from flask_limiter import Limiter
 from contextlib import closing
 import sqlite3
@@ -8,10 +8,12 @@ import tempfile
 import threading
 import time
 import os
+import functools
 
 import observability as obs
+import access
 import fixes
-from reports import PROBLEMS, ReportStore
+from reports import OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
 
 app = Flask(__name__)
@@ -452,6 +454,76 @@ def phrase_words(song, start_ms, end_ms):
                 if abs(int(words[j].end * 1000) - end_ms) <= 1:
                     return words[i:j + 1]
     return None
+
+
+# ------------------------------------------------------------------ admin (behind Cloudflare Access)
+
+admin_access = access.Verifier()
+
+PROBLEM_LABELS = {'timing': 'Está mal cortado', 'wrong_phrase': 'No es esta frase',
+                  'unsure': 'Quisió... (No sabe, no responde)',
+                  'starts_late': 'Empieza tarde', 'starts_early': 'Empieza antes',
+                  'ends_early': 'Termina antes', 'ends_late': 'Termina tarde'}
+assert set(PROBLEM_LABELS) == set(PROBLEMS) | set(OLD_PROBLEMS)
+STATUS_LABELS = {None: 'Sin revisar', 'provisional': 'Aplicado provisoriamente',
+                 'accepted': 'Aceptado', 'revoked': 'Rechazado'}
+PENDING = (None, 'provisional')       # what still needs a review
+
+
+def admin_only(view):
+    """Only with a valid Cloudflare Access token (access.py); anyone else gets 404, as if the
+    page didn't exist. The admin's email is in g.admin. Never cached, never indexed."""
+    @functools.wraps(view)
+    def wrapped(*args, **kwargs):
+        g.admin = admin_access.admin(request.headers)
+        if g.admin is None:
+            abort(404)
+        response = make_response(view(*args, **kwargs))
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['X-Robots-Tag'] = 'noindex, nofollow'
+        return response
+    return wrapped
+
+
+def clock_ms(ms):
+    """93500 → '1:33.5'"""
+    return f"{ms // 60000}:{ms % 60000 / 1000:04.1f}"
+
+
+def admin_report(r):
+    """A stored report as the admin list shows it."""
+    item = dict(r, title=title(r['song']), problem_label=PROBLEM_LABELS.get(r['problem'], r['problem']),
+                status_label=STATUS_LABELS.get(r['status'], r['status']), pending=r['status'] in PENDING,
+                served=f"{clock_ms(r['start_ms'])} – {clock_ms(r['end_ms'])}",
+                served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']))
+    if r['fixed_start_ms'] is not None:
+        shift = lambda ms: f"{ms / 1000:+.1f} s".replace('-', '−') if ms else None
+        item.update(adjusted=f"{clock_ms(r['fixed_start_ms'])} – {clock_ms(r['fixed_end_ms'])}",
+                    shift_start=shift(r['fixed_start_ms'] - r['start_ms']), shift_end=shift(r['fixed_end_ms'] - r['end_ms']),
+                    adjusted_url=url_for('clip', song=r['song'], start_ms=r['fixed_start_ms'], end_ms=r['fixed_end_ms']))
+    return item
+
+
+@app.route('/admin')
+@admin_only
+def admin_home():
+    return redirect(url_for('admin_reports'))
+
+
+@app.route('/admin/reports')
+@admin_only
+def admin_reports():
+    """Visitors' reports, newest first: the ones still to review (default) or all; ?song= one song."""
+    if reports is None:
+        abort(503)
+    show = 'all' if request.args.get('show') == 'all' else 'pending'
+    song = request.args.get('song') or None
+    rows = [r for r in reversed(reports.all()) if song is None or r['song'] == song]
+    counts = {'pending': sum(r['status'] in PENDING for r in rows), 'all': len(rows)}
+    if show == 'pending':
+        rows = [r for r in rows if r['status'] in PENDING]
+    return render_template('admin_reports.html', reports=[admin_report(r) for r in rows], show=show,
+                           song=song, song_title=title(song) if song else None, counts=counts, admin=g.admin)
 
 
 if __name__ == "__main__":
