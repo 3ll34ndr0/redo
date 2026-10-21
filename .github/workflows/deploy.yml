@@ -18,6 +18,8 @@ on:
       - "web/observability.py"
       - "web/reports.py"
       - "web/fixes.py"
+      - "web/access.py"
+      - "web/static/og.png"
       - "tools/reports.py"
       - "web/requirements.txt"
       - "web/templates/**"
@@ -169,6 +171,8 @@ jobs:
       IMAGE: ghcr.io/${{ github.repository }}:${{ github.sha }}
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.ref_name }}   # the branch's tip: a deploy commit may have landed since this push
 
       - name: Update deployment manifest
         run: |
@@ -182,5 +186,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add "$file"
-          git diff --cached --quiet || git commit -m "$message"
-          git push
+          # already there: GitHub sometimes starts two runs for one push, the first one deployed it
+          git diff --cached --quiet && { echo "$file already has this image"; exit 0; }
+          git commit -m "$message"
+          # someone pushed meanwhile (another deploy, a commit): replay the tag on top and retry
+          for attempt in 1 2 3; do
+            git push && exit 0
+            git pull --rebase
+          done
+          exit 1
