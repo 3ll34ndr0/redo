@@ -12,14 +12,14 @@ provider "cloudflare" {
   api_token = var.cloudflare_token
 }
 
-# Login with a one-time code sent by email: nothing to set up (no OAuth app, no secret).
-# An account has at most one: if it was already created in the dashboard, import it once:
-#   tofu import cloudflare_zero_trust_access_identity_provider.email_code accounts/<account_id>/<idp_id>
-resource "cloudflare_zero_trust_access_identity_provider" "email_code" {
+# Login with a one-time code sent by email: nothing to set up (no OAuth app, no secret). The
+# account has at most one, and turning Zero Trust on created it: looked up, not managed here.
+data "cloudflare_zero_trust_access_identity_providers" "all" {
   account_id = var.account_id
-  name       = "One-time PIN"
-  type       = "onetimepin"
-  config     = {}
+}
+
+locals {
+  email_code = one([for idp in data.cloudflare_zero_trust_access_identity_providers.all.result : idp.id if idp.type == "onetimepin"])
 }
 
 resource "cloudflare_zero_trust_access_group" "admins" {
@@ -43,7 +43,7 @@ resource "cloudflare_zero_trust_access_application" "admin" {
   # A path covers everything below it (/admin/reports, /admin/api/...)
   destinations              = [for host in var.hosts : { type = "public", uri = "${host}/admin" }]
   policies                  = [{ id = cloudflare_zero_trust_access_policy.admins.id, precedence = 1 }]
-  allowed_idps              = [cloudflare_zero_trust_access_identity_provider.email_code.id]
+  allowed_idps              = [local.email_code]
   auto_redirect_to_identity = true
   session_duration          = "24h"
   app_launcher_visible      = false
