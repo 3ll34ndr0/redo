@@ -49,6 +49,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Says which secret or variable is missing or malformed, without printing any of them
+      - name: Check the Cloudflare secrets and variables
+        run: |
+          ok=1
+          bad() { echo "::error::$1"; ok=0; }
+          [ -n "$TF_VAR_cloudflare_token" ] || bad "secret CLOUDFLARE_ACCESS_TOKEN is empty or missing"
+          [ -z "$TF_VAR_cloudflare_token" ] || printf '%s' "$TF_VAR_cloudflare_token" | grep -Eq '^[A-Za-z0-9_-]+$' \
+            || bad "secret CLOUDFLARE_ACCESS_TOKEN has characters other than letters, digits, - and _ (a space or a line break when pasting?)"
+          printf '%s' "$TF_VAR_account_id" | grep -Eq '^[0-9a-f]{32}$' \
+            || bad "variable CLOUDFLARE_ACCOUNT_ID is not 32 hexadecimal characters (empty, missing, or the Zone ID?)"
+          python3 -c 'import json,os,sys; v=json.loads(os.environ["TF_VAR_admin_emails"]); sys.exit(not (isinstance(v,list) and v and all(isinstance(e,str) and "@" in e for e in v)))' 2>/dev/null \
+            || bad 'secret UNAUDIO_ADMIN_EMAILS is not a JSON list of emails, e.g. ["me@example.com"] (straight double quotes)'
+          [ ${#TF_VAR_state_passphrase} -ge 16 ] || bad "secret TOFU_STATE_PASSPHRASE is missing or shorter than 16 characters"
+          [ $ok = 1 ] && echo "secrets and variables look right"
+          [ $ok = 1 ]
+
       # OpenTofu's lock (use_lockfile) needs conditional writes: a second "create only if
       # missing" upload of the same object must be refused (412). curl signs the S3 requests
       # (SigV4) and shows the raw HTTP status; the AWS CLI crashed on Contabo's answer.
