@@ -106,7 +106,7 @@ jobs:
           tofu apply -input=false -no-color access.tfplan 2>&1 | tee apply.out
           status=${PIPESTATUS[0]}
           if [ "$status" != 0 ]; then
-            msg=$(grep -A6 '^Error:' apply.out | head -60 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            msg=$(grep -A25 '^Error:' apply.out | head -80 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
             echo "::error title=tofu apply::${msg:-see the log}"
           fi
           exit "$status"
