@@ -145,8 +145,8 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the edges
     with page.expect_download() as d:
         card.locator(".download").click()
-    # 2.0 s adjusted + 0.2 s before + 0.3 s after
-    assert 2.3 <= mp3_seconds(d.value.path()) <= 2.7
+    # exactly the 2.0 s adjusted (mp3 frames: a few hundredths more or less)
+    assert 1.9 <= mp3_seconds(d.value.path()) <= 2.1
     card.get_by_text("▶ Escuchar el ajuste").click()
     assert card.locator("audio").get_attribute("src").endswith("/9100-11100.mp3")
 

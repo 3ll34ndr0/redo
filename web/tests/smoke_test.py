@@ -131,8 +131,8 @@ def run_checks(work):
     if clip:
         status, headers, body = get(WEB + clip.group(1))
         seconds = mp3_seconds(body, work) if status == 200 else None
-        # "sale sobre" is 2 words of 0.4 s, plus 0.2 s before and 0.3 s after
-        check("clip is a playable mp3 of the right length", seconds is not None and 1.0 <= seconds <= 1.6,
+        # "sale sobre" is 2 words of 0.4 s, cut exactly (no padding)
+        check("clip is a playable mp3 of the right length", seconds is not None and 0.7 <= seconds <= 0.9,
               f"status {status}, {headers.get('Content-Type')}, {len(body)} bytes, {seconds} s")
         status, headers, _ = get(WEB + clip.group(1) + "?name=Prueba.mp3")
         check("download sends an attachment", status == 200 and "attachment" in headers.get("Content-Disposition", ""))

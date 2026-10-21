@@ -29,7 +29,6 @@ MAX_RESULTS = 10
 MAX_CLIP_S = 60
 MAX_VOICE_S = MAX_CLIP_S + 10         # the editor's window: the clip plus 5 s on each side
 VOICE_RATE = 16000                    # Hz: plenty to see and hear a voice, 32 kB per second
-PAD_BEFORE, PAD_AFTER = 0.2, 0.3      # seconds of padding around the sung phrase
 CACHE_MB = int(os.getenv("SNIPPET_CACHE_MB", "300"))   # oldest clips deleted above this
 REPORTS_DB = os.getenv("REPORTS_DB", "reports.db")     # clip reports (writable; see reports.py)
 REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often reviews reach the index
@@ -276,7 +275,8 @@ def cut(ffmpeg_args, output_path, song, start_ms, end_ms):
 @limiter.limit("60/minute;600/hour")
 @limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
 def clip(song, start_ms, end_ms):
-    """The sung phrase from start to end (ms) plus padding, cut on first request and cached.
+    """The sung phrase from start to end (ms), exactly (no padding: visitors' timing fixes make the
+    edges right), cut on first request and cached.
 
     ?name=<file name> sends it as a download with that name (Descargar button).
     """
@@ -292,7 +292,7 @@ def clip(song, start_ms, end_ms):
         if not os.path.exists(input_path):
             abort(404)
         # Fast clip: copies the mp3 frames, no re-encoding
-        result, ffmpeg_ms = cut(['-ss', str(max(0, start - PAD_BEFORE)), '-to', str(end + PAD_AFTER),
+        result, ffmpeg_ms = cut(['-ss', str(start), '-to', str(end),
                                  '-i', input_path, '-c', 'copy'], output_path, song, start_ms, end_ms)
     obs.CLIPS.labels(result, kind).inc()
     obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind=kind, ffmpeg_ms=ffmpeg_ms)

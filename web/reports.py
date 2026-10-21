@@ -25,7 +25,7 @@ CREATE TABLE IF NOT EXISTS reports (
     id             INTEGER PRIMARY KEY AUTOINCREMENT,
     created_at     TEXT NOT NULL,      -- UTC, ISO 8601
     song           TEXT NOT NULL,
-    start_ms       INTEGER NOT NULL,   -- the clip as served (sung phrase, before padding)
+    start_ms       INTEGER NOT NULL,   -- the clip as served (the sung phrase)
     end_ms         INTEGER NOT NULL,
     problem        TEXT NOT NULL,      -- one of PROBLEMS
     fixed_start_ms INTEGER,            -- the visitor's adjustment, if any
