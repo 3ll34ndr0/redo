@@ -100,5 +100,14 @@ jobs:
 
       - name: Apply
         if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
-        run: tofu apply -input=false access.tfplan
+        # On failure, OpenTofu's errors also go to the run's annotations (readable without opening the log)
+        run: |
+          set +e
+          tofu apply -input=false -no-color access.tfplan 2>&1 | tee apply.out
+          status=${PIPESTATUS[0]}
+          if [ "$status" != 0 ]; then
+            msg=$(grep -A6 '^Error:' apply.out | head -60 | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=tofu apply::${msg:-see the log}"
+          fi
+          exit "$status"
 
