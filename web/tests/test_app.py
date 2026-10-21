@@ -327,3 +327,17 @@ def test_provisional_fixes_per_visitor_per_day(client, monkeypatch):
         return client.post("/report", headers=headers, data=json.dumps(body), content_type="application/json").get_json()
     assert [send(c, you)["provisional"] for c in lines[:3]] == [True, True, False]
     assert send(lines[3], other)["provisional"] is True        # someone else still can
+
+
+def test_every_module_goes_into_the_image():
+    """The Dockerfile copies the app's modules one by one, and .dockerignore lets only those through:
+    a new module missing from either only shows when the image fails to start."""
+    import glob
+    import os
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    modules = {os.path.basename(p) for p in glob.glob(os.path.join(root, "web", "*.py"))}
+    dockerfile = open(os.path.join(root, "Dockerfile")).read()
+    dockerignore = open(os.path.join(root, ".dockerignore")).read().split()
+    for name in modules:
+        assert f"web/{name}" in dockerfile, f"{name} isn't copied by the Dockerfile"
+        assert f"!web/{name}" in dockerignore, f"{name} isn't let through by .dockerignore"
