@@ -10,3 +10,4 @@
 !web/requirements.txt
 !web/templates/
 !web/static/og.png
+!web/static/wave.js

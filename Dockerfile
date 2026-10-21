@@ -11,7 +11,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 
 COPY web/app.py web/search.py web/textnorm.py web/observability.py web/reports.py web/fixes.py web/access.py ./
 COPY web/templates/ templates/
-COPY web/static/og.png static/
+COPY web/static/og.png web/static/wave.js static/
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \

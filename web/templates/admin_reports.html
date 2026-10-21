@@ -1,3 +1,4 @@
+{% import '_wave.html' as wave %}
 <!DOCTYPE html>
 <html lang="es">
 <head>
@@ -12,7 +13,8 @@
         .bg-argentina { background: linear-gradient(180deg, #74ACDF 0%, #FFFFFF 50%, #74ACDF 100%); }
         .card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
         .play[data-playing] { background: #74ACDF; color: #fff; }
-    </style>
+        .decision:disabled { opacity: .5; cursor: not-allowed; }
+{{ wave.styles() }}    </style>
 </head>
 <body class="bg-argentina min-h-screen pb-20">
     <header class="max-w-2xl mx-auto px-4 pt-8 pb-6">
@@ -34,7 +36,10 @@
 
     <main class="max-w-2xl mx-auto px-4 space-y-4">
         {% for r in reports %}
-        <article class="report card rounded-2xl shadow-lg p-4 text-sm text-gray-700" data-id="{{ r.id }}">
+        <article class="report card rounded-2xl shadow-lg p-4 text-sm text-gray-700" data-id="{{ r.id }}"
+            data-song="{{ r.song }}" data-start="{{ r.start_ms }}" data-end="{{ r.end_ms }}"
+            data-edit-start="{{ r.edit_start }}" data-edit-end="{{ r.edit_end }}"
+            {% if r.visitor_adjusted %}data-visitor-start="{{ r.fixed_start_ms }}" data-visitor-end="{{ r.fixed_end_ms }}"{% endif %}>
             <div class="flex items-start justify-between gap-3">
                 <div>
                     <h2 class="font-bold text-gray-800"><a href="?show={{ show }}&song={{ r.song | urlencode }}" class="hover:underline">{{ r.title }}</a></h2>
@@ -54,11 +59,17 @@
                 <dd class="adjusted"><span class="font-mono">{{ r.adjusted }}</span>
                     <span class="block text-xs text-gray-500">{% if r.shift_start %}inicio {{ r.shift_start }}{% endif %}{% if r.shift_start and r.shift_end %} · {% endif %}{% if r.shift_end %}fin {{ r.shift_end }}{% endif %}{% if not r.shift_start and not r.shift_end %}sin cambios{% endif %}</span></dd>
                 {% endif %}
+                {% if r.reviewed_times %}
+                <dt class="text-gray-500">Ajuste revisado</dt><dd class="reviewed-times font-mono">{{ r.reviewed_times }}</dd>
+                {% endif %}
             </dl>
             <div class="mt-3 flex flex-wrap gap-2">
                 <button type="button" class="play px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-600 font-bold" data-src="{{ r.served_url }}">▶ Servido</button>
                 {% if r.adjusted %}
                 <button type="button" class="play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold" data-src="{{ r.adjusted_url }}">▶ Ajuste</button>
+                {% endif %}
+                {% if r.reviewed_url %}
+                <button type="button" class="play px-3 py-1 rounded-lg border-2 border-green-600 text-green-700 font-bold" data-src="{{ r.reviewed_url }}">▶ Ajuste revisado</button>
                 {% endif %}
             </div>
             <p class="reviewed mt-3 text-xs text-gray-600"{% if not r.decision %} hidden{% endif %}>
@@ -67,6 +78,15 @@
             <details class="decide mt-3"{% if r.pending %} open{% endif %}>
                 <summary class="cursor-pointer text-xs text-gray-500 underline">{{ 'Decidir' if not r.decision else 'Cambiar la decisión' }}</summary>
                 <div class="mt-2 space-y-2">
+                    {% if r.first_tok is not none %}
+                    <details class="tune">
+                        <summary class="cursor-pointer text-xs text-gray-500 underline">Ajustar los bordes</summary>
+                        <div class="mt-2 space-y-2">
+                            <p class="text-xs text-gray-500">Arrastrá los bordes (o tocá la onda; flechas ±0,1 s, Shift ±1 s). Rayas: como se sirvió{% if r.visitor_adjusted %}; puntos amarillos: el ajuste del visitante{% endif %}. Se ve <span class="wave-source">solo la voz</span>.</p>
+                            {% call wave.editor() %}<button type="button" class="tune-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el ajuste</button>{% endcall %}
+                        </div>
+                    </details>
+                    {% endif %}
                     <input type="text" class="note w-full px-3 py-1 rounded-lg border border-gray-300 text-sm" maxlength="500"
                         placeholder="Nota (opcional)" aria-label="Nota">
                     <div class="flex flex-wrap gap-2">
@@ -85,6 +105,7 @@
         {% endfor %}
     </main>
 
+    <script src="{{ url_for('static', filename='wave.js') }}"></script>
     <script>
         // One clip at a time: the button that's playing says ■ and stops it on a second tap
         const audio = new Audio();
@@ -92,17 +113,58 @@
         const reset = () => { if (current) { delete current.dataset.playing; current.textContent = current.dataset.label; current = null; } };
         audio.addEventListener('ended', reset);
         audio.addEventListener('error', reset);
-        document.querySelectorAll('.play').forEach(button => {
-            button.dataset.label = button.textContent;
-            button.addEventListener('click', () => {
-                const again = current === button;
-                audio.pause(); reset();
-                if (again) return;
-                current = button;
-                button.dataset.playing = '1';
-                button.textContent = '■ Parar';
-                audio.src = button.dataset.src;
-                audio.play().catch(reset);
+        audio.addEventListener('play', () => WaveEditor.stopVoice());     // never with the voice preview
+        function play(button, src) {
+            const again = current === button;
+            audio.pause(); reset();
+            if (again) return;
+            current = button;
+            button.dataset.label = button.dataset.label || button.textContent;
+            button.dataset.playing = '1';
+            button.textContent = '■ Parar';
+            audio.src = src;
+            audio.play().catch(reset);
+        }
+        document.querySelectorAll('.play').forEach(button => button.addEventListener('click', () => play(button, button.dataset.src)));
+
+        // Ajustar los bordes: the timing editor (static/wave.js), loaded when opened (one /voice
+        // request per card the admin looks at). "Aplicar el ajuste" sends the edges as they are
+        // (the server keeps them only if they aren't the visitor's); without an adjustment from the
+        // visitor it waits until the edges move away from the clip as served.
+        const editors = new Map();          // card -> WaveEditor
+        const times = card => {
+            const e = editors.get(card), d = card.dataset;
+            return e ? { ...e.fixed } : { start: +d.editStart, end: +d.editEnd };
+        };
+        const canApply = card => {
+            const t = times(card);
+            return t.start !== +card.dataset.start || t.end !== +card.dataset.end;
+        };
+        const refreshApply = card => {
+            const button = card.querySelector('.decision[data-decision=apply]');
+            if (!button) return;
+            button.disabled = !canApply(card);
+            button.title = button.disabled ? 'Mové los bordes primero (en Ajustar los bordes)' : '';
+        };
+        document.querySelectorAll('.report').forEach(card => {
+            refreshApply(card);
+            const tune = card.querySelector('.tune');
+            if (!tune) return;
+            const d = card.dataset;
+            tune.addEventListener('toggle', () => {
+                if (!tune.open) return WaveEditor.stopVoice();
+                if (editors.has(card)) return editors.get(card).draw();     // the canvas needs its size again
+                const editor = new WaveEditor(tune, {
+                    onChange: () => refreshApply(card),
+                    onVoicePlay: () => { audio.pause(); reset(); },
+                });
+                editors.set(card, editor);
+                const marks = d.visitorStart ? [+d.visitorStart, +d.visitorEnd] : [];
+                editor.load(d.song, { start: +d.start, end: +d.end }, { start: +d.editStart, end: +d.editEnd }, marks);
+            });
+            tune.querySelector('.tune-play').addEventListener('click', e => {
+                const t = times(card);
+                play(e.currentTarget, `/clip/${encodeURIComponent(d.song)}/${t.start}-${t.end}.mp3`);
             });
         });
 
@@ -118,7 +180,8 @@
                 try {
                     const r = await fetch(`/admin/reports/${card.dataset.id}/decision`, {
                         method: 'POST', headers: { 'Content-Type': 'application/json' },
-                        body: JSON.stringify({ decision: button.dataset.decision, note: card.querySelector('.note').value }),
+                        body: JSON.stringify({ decision: button.dataset.decision, note: card.querySelector('.note').value,
+                                               ...(button.dataset.decision === 'apply' ? { start_ms: times(card).start, end_ms: times(card).end } : {}) }),
                     });
                     if (!r.ok) throw new Error(r.status);
                     const res = await r.json();
@@ -135,6 +198,7 @@
                     status.textContent = 'No se pudo guardar. Probá de nuevo.';
                 } finally {
                     card.querySelectorAll('.decision').forEach(b => b.disabled = false);
+                    refreshApply(card);
                 }
             }));
         });

@@ -2,6 +2,8 @@
 """Clip reports from visitors (¿No coincide?): download them and summarize per lyric line.
 
     tools/reports.py export [-o reports.json]   copy all reports from the running pod (ssh + kubectl)
+    tools/reports.py pull [-o reports.json]     export, then bring the decisions made on the site
+                                                 (/admin/reports) into reports-reviewed.json and timing_fixes.json
     tools/reports.py summary [reports.json]      which lines are reported, and by how much they're off
     tools/reports.py summary --db reports.db     same, from a local SQLite file (e.g. a test run)
     tools/reports.py review [reports.json]       go through the reports not reviewed yet: clip URLs
@@ -24,6 +26,12 @@ applied by lyrics/build_db.py; then rsync the DB):
   [d] delete the clip's words: they were aligned where they aren't sung
 The clip's words are the ones the server stored with the report (first_tok..last_tok); for
 older reports, found in the local web/redondos.db by the served times.
+
+Decisions can also be made on the site (/admin/reports, behind Cloudflare Access): they take
+effect there at once, and `pull` writes them here like a review would (apply/delete →
+timing_fixes.json, with the times the admin set on the page's editor if any). Each site decision
+is taken once (its time is recorded): reviewing the same report here afterwards wins, until the
+site decides it again.
 
 Provisional fixes: the site applies a timing report's adjustment at once (web/reports.py).
 A review decides its status: [a] = accepted (stays applied until the rebuilt database has it),
@@ -131,6 +139,8 @@ SEARCH_DB = os.path.join(ROOT, "web", "redondos.db")
 FIXES = os.path.join(ROOT, "lyrics", "text", "timing_fixes.json")
 DECISIONS = {"a": "apply the adjustment", "d": "delete the words", "l": "lyrics fixed", "c": "chorus added",
              "t": "timing off, leave it", "o": "other fix", "n": "nothing wrong"}
+# The site's decisions (web/reports.py DECISIONS) as the review's letters
+SITE_DECISIONS = {"apply": "a", "delete": "d", "lyrics": "l", "chorus": "c", "leave": "t", "other": "o", "nothing": "n"}
 
 
 def clip_url(song, start_ms, end_ms):
@@ -171,7 +181,8 @@ def show(r, done=None):
     if r.get("status"):
         print(f"   status:   {r['status']}" + (" (live on the site until revoked)" if r["status"] == "provisional" else ""))
     if done:
-        print(f"   reviewed: {done['decision']} ({done['at']})" + (f": {done['note']}" if done.get("note") else ""))
+        print(f"   reviewed: {done['decision']} ({done['at']}" + (f", on the site by {done['by']}" if done.get("by") else "")
+              + ")" + (f": {done['note']}" if done.get("note") else ""))
 
 
 def phrase_words(conn, song, start_ms, end_ms):
@@ -286,8 +297,10 @@ def review(rows, reviewed_path, list_only=False, show_all=False, ids=(), db=SEAR
             os.makedirs(os.path.dirname(fixes_path), exist_ok=True)
             save_reviewed(fixes_path, kept)
             print(f"   → {fixes_path}: rebuild with lyrics/build_db.py, rsync the DB, commit lyrics/text")
+        # site_at: the site decision already taken (pull), so this review isn't overwritten by it
         reviewed[report_key(r)] = {"decision": DECISIONS[answer], "note": note,
-                                   "at": time.strftime("%Y-%m-%d %H:%M"), "status": status_after(r, answer)}
+                                   "at": time.strftime("%Y-%m-%d %H:%M"), "status": status_after(r, answer),
+                                   **({"site_at": r["reviewed_at"]} if r.get("decision") else {})}
         save_reviewed(reviewed_path, reviewed)      # after each answer: quitting loses nothing
         if reviewed[report_key(r)]["status"]:
             print(f"   → {reviewed[report_key(r)]['status']} on the site after `tools/reports.py sync`")
@@ -296,6 +309,40 @@ def review(rows, reviewed_path, list_only=False, show_all=False, ids=(), db=SEAR
     print(f"{left} left to review")
     if status_changes(rows, reviewed):
         print("statuses to send to the site: tools/reports.py sync")
+
+
+def merge_site_decisions(rows, reviewed_path, fixes_path=FIXES):
+    """Record the decisions made on the site (/admin) as reviews: in the reviewed file, and apply/
+    delete in timing_fixes.json. Only decisions not taken yet (a different reviewed_at)."""
+    reviewed = load_reviewed(reviewed_path)
+    before = load_fixes(fixes_path)
+    kept, taken = list(before), 0
+    for r in rows:
+        letter = SITE_DECISIONS.get(r.get("decision"))
+        key = report_key(r)
+        if not letter or reviewed.get(key, {}).get("site_at") == r["reviewed_at"]:
+            continue
+        kept = [f for f in kept if f["report"] != key]          # replaces (or drops) an earlier fix
+        line = f"#{r['id']}  {r['song']}  {r['decision']}"
+        if letter in ("a", "d"):
+            # the same fix the site applies (web/fixes.py), with the admin's times if set
+            fix = fixes.from_report(dict(r, status="deleted" if letter == "d" else "accepted"))
+            fix.update(added=r["reviewed_at"][:10], note=r.get("note") or "")
+            kept.append(fix)
+            moved = ", ".join(f"{edge} {fix[edge]:.2f} s" for edge in ("start", "end") if edge in fix)
+            line += f"  → {fix['action']} {fix['first']}-{fix['last']}" + (f" ({moved})" if moved else "")
+        print(line)
+        reviewed[key] = {"decision": DECISIONS[letter], "note": r.get("note") or "",
+                         "at": r["reviewed_at"].replace("T", " ")[:16], "status": r.get("status"),
+                         "by": r.get("reviewed_by"), "site_at": r["reviewed_at"]}
+        taken += 1
+    print(f"{taken} new decision(s) from the site")
+    if kept != before:
+        os.makedirs(os.path.dirname(os.path.abspath(fixes_path)), exist_ok=True)
+        save_reviewed(fixes_path, kept)
+        print(f"→ {fixes_path}: rebuild with lyrics/build_db.py, rsync the DB, commit lyrics/text")
+    if taken:
+        save_reviewed(reviewed_path, reviewed)
 
 
 def status_changes(rows, reviewed):
@@ -349,6 +396,10 @@ def main():
     sub = p.add_subparsers(dest="cmd", required=True)
     e = sub.add_parser("export", help="download all reports from the pod")
     e.add_argument("-o", "--out", default=EXPORT)
+    pl = sub.add_parser("pull", help="export, then take the decisions made on the site")
+    pl.add_argument("-o", "--out", default=EXPORT)
+    pl.add_argument("--reviewed", help=f"decisions file (default: {REVIEWED} next to the export)")
+    pl.add_argument("--fixes", default=FIXES, help="timing corrections file (apply and delete write it)")
     s = sub.add_parser("summary", help="summarize reports per lyric line")
     s.add_argument("file", nargs="?", default=EXPORT)
     s.add_argument("--db", help="read a local reports.db instead of an export")
@@ -370,6 +421,10 @@ def main():
     args = p.parse_args()
     if args.cmd == "export":
         export(args.out)
+    elif args.cmd == "pull":
+        export(args.out)
+        reviewed = args.reviewed or os.path.join(os.path.dirname(os.path.abspath(args.out)), REVIEWED)
+        merge_site_decisions(load(args.out), reviewed, args.fixes)
     elif args.cmd == "summary":
         summary(load(args.file, args.db))
     else:

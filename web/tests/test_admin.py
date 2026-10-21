@@ -182,3 +182,34 @@ def test_other_decisions_take_back_a_provisional_fix(client):
     assert "/clip/cancion_de_prueba/9300-10400.mp3" in search_page(client)
     assert decide(client, rid, "nothing").get_json()["status"] == "revoked"
     assert "/clip/cancion_de_prueba/9300-10100.mp3" in search_page(client)
+
+
+# --- the admin's own times (phase 2b: set on the page's editor before applying)
+
+def test_apply_with_the_admins_own_times(client, monkeypatch):
+    monkeypatch.setattr(app_module, "AUTO_APPLY", False)
+    rid = report(client, fixed_start_ms=9300, fixed_end_ms=10400)            # the visitor went too far
+    r = decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9200, "end_ms": 10300})
+    assert r.status_code == 200 and r.get_json()["status"] == "accepted"
+    page = search_page(client)
+    assert "/clip/cancion_de_prueba/9200-10300.mp3" in page and "9300-10400" not in page
+    stored = app_module.reports.get(rid)
+    assert (stored["fixed_start_ms"], stored["fixed_end_ms"]) == (9300, 10400)              # the visitor's stay
+    assert (stored["review_start_ms"], stored["review_end_ms"]) == (9200, 10300)
+    admin = client.get("/admin/reports?show=all", headers=tokens.headers()).get_data(as_text=True)
+    assert "Ajuste revisado" in admin and "/clip/cancion_de_prueba/9200-10300.mp3" in admin
+
+
+def test_apply_without_a_visitors_adjustment_needs_times(client):
+    rid = report(client, problem="wrong_phrase")
+    assert decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9300, "end_ms": 10100}).status_code == 400
+    assert decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9300}).status_code == 400
+    assert decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9900, "end_ms": 9800}).status_code == 400
+    assert decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9300, "end_ms": 10600}).status_code == 200
+    assert "/clip/cancion_de_prueba/9300-10600.mp3" in search_page(client)
+
+
+def test_the_visitors_times_sent_back_are_not_stored_twice(client):
+    rid = report(client, fixed_start_ms=9300, fixed_end_ms=10400)
+    assert decide(client, rid, "apply", json={"decision": "apply", "start_ms": 9300, "end_ms": 10400}).status_code == 200
+    assert app_module.reports.get(rid)["review_start_ms"] is None

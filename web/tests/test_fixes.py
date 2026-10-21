@@ -68,3 +68,12 @@ def test_from_report_keeps_only_the_moved_edges():
     f = fixes.from_report(r)
     assert f["report"] == "7@2026-10-20T10:00:00Z" and f["action"] == "adjust"
     assert f["start"] == 0.8 and "end" not in f
+
+
+def test_from_report_prefers_the_admins_times():
+    r = dict(id=1, created_at="2026-10-21T10:00:00Z", song="s", start_ms=1000, end_ms=2000, first_tok=3, last_tok=4,
+             first_word="a", last_word="b", fixed_start_ms=900, fixed_end_ms=2000, status="accepted",
+             review_start_ms=950, review_end_ms=2100)
+    fix = fixes.from_report(r)
+    assert (fix["start"], fix["end"]) == (0.95, 2.1)
+    assert "end" not in fixes.from_report(dict(r, review_start_ms=None, review_end_ms=None))

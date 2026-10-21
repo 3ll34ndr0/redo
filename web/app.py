@@ -508,15 +508,23 @@ def admin_report(r):
     """A stored report as the admin list shows it."""
     words = r['first_tok'] is not None
     adjusted = r['fixed_start_ms'] is not None and (r['fixed_start_ms'], r['fixed_end_ms']) != (r['start_ms'], r['end_ms'])
-    # apply needs the words and an adjustment, delete the words; the rest are always possible
-    choices = [(k, v) for k, v in DECISION_LABELS.items() if (k != 'apply' or (words and adjusted)) and (k != 'delete' or words)]
+    # apply and delete need the words (apply also an adjustment: the visitor's, or one set on the
+    # page's editor, see admin_decide); the rest are always possible
+    choices = [(k, v) for k, v in DECISION_LABELS.items() if k not in ('apply', 'delete') or words]
+    # the editor starts from the adjustment (the admin's when there is one, else the visitor's)
+    start, end = fixes.adjusted_ms(r)
     item = dict(r, title=title(r['song']), problem_label=PROBLEM_LABELS.get(r['problem'], r['problem']),
                 status_label=STATUS_LABELS.get(r['status'], r['status']), pending=r['status'] in PENDING,
                 decision_label=DECISION_LABELS.get(r['decision']), choices=choices,
                 words=f"{r['first_word']} … {r['last_word']}" if words and r['first_tok'] != r['last_tok']
                       else r['first_word'] if words else None,
                 served=f"{clock_ms(r['start_ms'])} – {clock_ms(r['end_ms'])}",
-                served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']))
+                served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']),
+                visitor_adjusted=adjusted, edit_start=r['start_ms'] if start is None else start,
+                edit_end=r['end_ms'] if end is None else end)
+    if r['review_start_ms'] is not None:
+        item.update(reviewed_times=f"{clock_ms(r['review_start_ms'])} – {clock_ms(r['review_end_ms'])}",
+                    reviewed_url=url_for('clip', song=r['song'], start_ms=r['review_start_ms'], end_ms=r['review_end_ms']))
     if r['fixed_start_ms'] is not None:
         shift = lambda ms: f"{ms / 1000:+.1f} s".replace('-', '−') if ms else None
         item.update(adjusted=f"{clock_ms(r['fixed_start_ms'])} – {clock_ms(r['fixed_end_ms'])}",
@@ -561,8 +569,10 @@ def same_origin():
 @app.route('/admin/reports/<int:report_id>/decision', methods=['POST'])
 @admin_only
 def admin_decide(report_id):
-    """Record a review: {"decision": one of reports.DECISIONS, "note": optional}. "apply" and "delete"
-    change the search at once (also in production, where visitors' reports wait for a review)."""
+    """Record a review: {"decision": one of reports.DECISIONS, "note": optional; for "apply" also
+    "start_ms", "end_ms": optional, the times set on the page's editor (else the visitor's
+    adjustment)}. "apply" and "delete" change the search at once (also in production, where
+    visitors' reports wait for a review)."""
     if reports is None:
         abort(503)
     if not same_origin():
@@ -575,10 +585,25 @@ def admin_decide(report_id):
     if decision not in dict(admin_report(report)['choices']):
         abort(400, "decision not possible for this report")
     note = str(data.get('note') or '')[:500] or None
-    reports.decide(report_id, decision, note, g.admin)
+    times = (None, None)                    # the admin's own times: only for apply, when not the visitor's
+    if decision == 'apply':
+        start, end = data.get('start_ms'), data.get('end_ms')
+        if (start is None) != (end is None):
+            abort(400, "start_ms and end_ms go together")
+        if start is not None:
+            start, end = _ms(start, "start_ms"), _ms(end, "end_ms")
+            _clip_range(start, end, "adjustment")
+        else:
+            start, end = report['fixed_start_ms'], report['fixed_end_ms']
+        if start is None or (start, end) == (report['start_ms'], report['end_ms']):
+            abort(400, "nothing to apply: the edges are where the clip was served")
+        if (start, end) != (report['fixed_start_ms'], report['fixed_end_ms']):
+            times = (start, end)
+    reports.decide(report_id, decision, note, g.admin, times)
     _index["checked"] = 0.0                 # the next search already has it
     obs.REPORT_REVIEWS.labels(decision).inc()
-    obs.log("report_review", id=report_id, song=report['song'], decision=decision, status=DECISIONS[decision])
+    obs.log("report_review", id=report_id, song=report['song'], decision=decision, status=DECISIONS[decision],
+            own_times=times != (None, None) or None)
     item = admin_report(reports.get(report_id))
     return jsonify(status=item['status'], status_label=item['status_label'], decision_label=item['decision_label'])
 

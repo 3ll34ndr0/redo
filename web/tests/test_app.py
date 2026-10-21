@@ -348,12 +348,13 @@ def test_provisional_fixes_per_visitor_per_day(client, monkeypatch):
 
 
 def test_every_module_goes_into_the_image():
-    """The Dockerfile copies the app's modules one by one, and .dockerignore lets only those through:
+    """The Dockerfile copies the app's modules (and the pages' scripts) one by one, and .dockerignore lets only those through:
     a new module missing from either only shows when the image fails to start."""
     import glob
     import os
     root = os.path.join(os.path.dirname(__file__), "..", "..")
-    modules = {os.path.basename(p) for p in glob.glob(os.path.join(root, "web", "*.py"))}
+    modules = {os.path.relpath(p, os.path.join(root, "web")) for pattern in ("*.py", "static/*.js")
+               for p in glob.glob(os.path.join(root, "web", pattern))}
     dockerfile = open(os.path.join(root, "Dockerfile")).read()
     dockerignore = open(os.path.join(root, ".dockerignore")).read().split()
     for name in modules:

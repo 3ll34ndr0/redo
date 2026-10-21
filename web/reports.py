@@ -41,7 +41,9 @@ CREATE TABLE IF NOT EXISTS reports (
     reviewed_at    TEXT,               -- UTC, when status left provisional
     decision       TEXT,               -- the admin's review (DECISIONS); NULL: not reviewed on the site
     note           TEXT,               -- ... with an optional note
-    reviewed_by    TEXT                -- ... by whom (the Cloudflare Access email)
+    reviewed_by    TEXT,               -- ... by whom (the Cloudflare Access email)
+    review_start_ms INTEGER,           -- the times the admin set on /admin before applying, when not
+    review_end_ms  INTEGER             -- the visitor's (NULL: the visitor's adjustment as it is)
 )
 """
 STATUSES = ("provisional", "accepted", "deleted", "revoked")
@@ -100,14 +102,16 @@ class ReportStore:
             row = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,)).fetchone()
             return dict(row) if row else None
 
-    def decide(self, report_id, decision, note, reviewer):
-        """Record an admin's review: the decision, and the status it means (DECISIONS)."""
+    def decide(self, report_id, decision, note, reviewer, times=(None, None)):
+        """Record an admin's review: the decision, the status it means (DECISIONS), and for "apply"
+        the times the admin set (start_ms, end_ms), or (None, None) for the visitor's."""
         if decision not in DECISIONS:
             raise ValueError(decision)
         now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         with self.lock, closing(self._connect()) as conn:
-            conn.execute("UPDATE reports SET decision = ?, note = ?, reviewed_by = ?, status = ?, reviewed_at = ?"
-                         " WHERE id = ?", (decision, note, reviewer, DECISIONS[decision], now, report_id))
+            conn.execute("UPDATE reports SET decision = ?, note = ?, reviewed_by = ?, status = ?, reviewed_at = ?,"
+                         " review_start_ms = ?, review_end_ms = ? WHERE id = ?",
+                         (decision, note, reviewer, DECISIONS[decision], now, *times, report_id))
             conn.commit()
 
     def set_status(self, ids, status):
