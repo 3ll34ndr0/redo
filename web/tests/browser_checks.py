@@ -51,7 +51,8 @@ def free_port():
 def base_url():
     port = free_port()
     proc = subprocess.Popen([sys.executable, "-m", "gunicorn", "--bind", f"127.0.0.1:{port}", "--workers", "1",
-                             "--threads", "8", "app:app"], cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+                             "--threads", "8", "app:app"], cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
+                            env={**os.environ, "REPORTS_RECHECK_S": "0"})     # a revoked report is gone at once
     url = f"http://127.0.0.1:{port}"
     for _ in range(60):
         try:
@@ -144,8 +145,8 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the edges
     with page.expect_download() as d:
         card.locator(".download").click()
-    # 2.0 s adjusted + 0.2 s before + 0.3 s after
-    assert 2.3 <= mp3_seconds(d.value.path()) <= 2.7
+    # exactly the 2.0 s adjusted (mp3 frames: a few hundredths more or less)
+    assert 1.9 <= mp3_seconds(d.value.path()) <= 2.1
     card.get_by_text("▶ Escuchar el ajuste").click()
     assert card.locator("audio").get_attribute("src").endswith("/9100-11100.mp3")
 
@@ -166,6 +167,14 @@ def test_sending_a_report(page, base_url):
     assert len(rows) == before + 1
     # the clip as served, with the visitor's correction
     assert rows[-1] == ("cancion_de_prueba", 9300, 10100, "timing", 8300, 10100)
+    # applied at once (provisional): searching again gives the corrected clip
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    assert download_href(page.locator(".audio-card").first).endswith("/8300-10100.mp3")
+    # until a review revokes it (the other tests, and engines, expect the fixture's timing)
+    with sqlite3.connect(os.environ["REPORTS_DB"]) as conn:
+        conn.execute("UPDATE reports SET status = 'revoked' WHERE status = 'provisional'")
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    assert download_href(page.locator(".audio-card").first).endswith("/9300-10100.mp3")
 
 
 def test_reopening_goes_back_to_the_served_clip(page, base_url):

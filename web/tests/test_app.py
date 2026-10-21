@@ -133,6 +133,15 @@ def test_logs_are_json(client, capsys):
 
 # --- clip reports (¿No coincide?)
 
+@pytest.fixture(autouse=True)
+def no_provisional_fixes():
+    """Timing reports move the index's words at once: put them back after each test."""
+    yield
+    app_module.reports.set_status([r["id"] for r in app_module.reports.applied()], "revoked")
+    app_module._index["checked"] = 0.0
+    app_module._auto_applied.clear()
+
+
 def post_report(client, **fields):
     body = {"song": "cancion_de_prueba", "start_ms": 5000, "end_ms": 7000, "problem": "timing"}
     body.update(fields)
@@ -201,3 +210,134 @@ def test_every_problem_is_offered_accepted_and_counted(client):
         before = metric("extractos_clip_reports_total", problem=problem)
         assert post_report(client, problem=problem).status_code == 201
         assert metric("extractos_clip_reports_total", problem=problem) == before + 1
+
+
+# --- provisional timing fixes: a timing report is applied at once, until it's reviewed
+
+def clip_of(client, query):
+    page = client.get("/search?lyric=" + query).get_data(as_text=True)
+    return re.search(r'/clip/cancion_de_prueba/(\d+-\d+)\.mp3', page).group(1)
+
+
+def test_timing_report_is_applied_at_once_and_revoked_on_review(client):
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+    r = post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    assert r.get_json()["provisional"] is True
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert (stored["first_tok"], stored["last_tok"], stored["first_word"], stored["last_word"]) == (7, 8, "sale", "sobre")
+    assert stored["status"] == "provisional"
+    assert clip_of(client, "sale+sobre") == "9000-10100"       # no wait: the reporter sees it
+    app_module.reports.set_status([stored["id"]], "revoked")
+    assert clip_of(client, "sale+sobre") == "9000-10100"       # reviews are picked up every REPORTS_RECHECK_S
+    app_module._index["checked"] = 0.0
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+
+
+def test_accepted_reports_stay_applied(client):
+    r = post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9300, fixed_end_ms=10400)
+    app_module.reports.set_status([r.get_json()["id"]], "accepted")
+    app_module._index["checked"] = 0.0
+    assert clip_of(client, "sale+sobre") == "9300-10400"
+
+
+def test_reports_on_an_adjusted_clip_take_the_median(client):
+    post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    # the next visitor gets the adjusted clip, and nudges it
+    post_report(client, start_ms=9000, end_ms=10100, fixed_start_ms=9200, fixed_end_ms=10100)
+    assert clip_of(client, "sale+sobre") == "9100-10100"
+
+
+@pytest.mark.parametrize("fields", [
+    {"problem": "wrong_phrase", "fixed_start_ms": 9000, "fixed_end_ms": 10100},
+    {"problem": "timing"},                                          # no adjustment
+    {"problem": "timing", "fixed_start_ms": 9300, "fixed_end_ms": 10100},   # adjustment = as served
+])
+def test_only_timing_adjustments_are_applied(client, fields):
+    r = post_report(client, start_ms=9300, end_ms=10100, **fields)
+    assert r.get_json()["provisional"] is False
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert stored["status"] is None and stored["first_tok"] == 7       # words still recorded for the review
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+
+
+def test_a_clip_that_matches_no_words_is_not_applied(client):
+    # e.g. a page from before the database changed
+    r = post_report(client, start_ms=9350, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    assert r.get_json()["provisional"] is False
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    assert stored["status"] is None and stored["first_tok"] is None
+
+
+def test_reports_baked_into_the_database_are_not_applied_again(client, tmp_path, monkeypatch):
+    import shutil
+    import sqlite3
+    r = post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    stored = [x for x in app_module.reports.all() if x["id"] == r.get_json()["id"]][0]
+    db = tmp_path / "redondos.db"
+    shutil.copy(app_module.DB_PATH, db)
+    with sqlite3.connect(db) as conn:       # as build_db.py writes it, without the timing (the test only needs the key)
+        conn.execute("CREATE TABLE fixes (report TEXT PRIMARY KEY)")
+        conn.execute("INSERT INTO fixes VALUES (?)", (f"{stored['id']}@{stored['created_at']}",))
+    monkeypatch.setattr(app_module, "DB_PATH", str(db))
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+    monkeypatch.undo()
+    app_module._index["mtime"] = None       # back to the fixture's database
+
+
+def test_old_reports_database_gets_the_new_columns(tmp_path):
+    import sqlite3
+    from reports import ReportStore
+    path = tmp_path / "old.db"
+    with sqlite3.connect(path) as conn:
+        conn.execute("CREATE TABLE reports (id INTEGER PRIMARY KEY AUTOINCREMENT, created_at TEXT NOT NULL,"
+                     " song TEXT NOT NULL, start_ms INTEGER NOT NULL, end_ms INTEGER NOT NULL, problem TEXT NOT NULL,"
+                     " fixed_start_ms INTEGER, fixed_end_ms INTEGER, query TEXT, line TEXT, db_version TEXT)")
+        conn.execute("INSERT INTO reports (created_at, song, start_ms, end_ms, problem, fixed_start_ms, fixed_end_ms)"
+                     " VALUES ('2026-10-01T00:00:00Z', 's', 1000, 2000, 'timing', 900, 2000)")
+    store = ReportStore(str(path))
+    old = store.all()[0]
+    assert old["status"] is None and old["first_tok"] is None       # reviewed by hand already: never applied
+    assert store.applied() == []
+
+
+def test_kill_switch(client, monkeypatch):
+    post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10100)
+    assert clip_of(client, "sale+sobre") == "9000-10100"
+    monkeypatch.setattr(app_module, "AUTO_APPLY", False)
+    r = post_report(client, start_ms=9000, end_ms=10100, fixed_start_ms=9000, fixed_end_ms=10500)
+    assert r.get_json()["provisional"] is False                 # new reports wait for a review
+    app_module._index["checked"] = 0.0
+    assert clip_of(client, "sale+sobre") == "9300-10100"        # and the stored ones stop being applied
+
+
+def test_a_far_move_waits_for_a_review(client):
+    r = post_report(client, start_ms=9300, end_ms=10100, fixed_start_ms=4200, fixed_end_ms=10100)
+    assert r.get_json()["provisional"] is False
+    assert clip_of(client, "sale+sobre") == "9300-10100"
+
+
+def test_provisional_fixes_per_visitor_per_day(client, monkeypatch):
+    monkeypatch.setattr(app_module, "AUTO_APPLY_PER_DAY", 2)
+    you, other = {"CF-Connecting-IP": "203.0.113.1"}, {"CF-Connecting-IP": "203.0.113.2"}
+    lines = [(5000, 7000), (8500, 10900), (12400, 14400), (15900, 17900)]      # the fixture's first four lines
+
+    def send(clip, headers):
+        body = {"song": "cancion_de_prueba", "start_ms": clip[0], "end_ms": clip[1], "problem": "timing",
+                "fixed_start_ms": clip[0] - 100, "fixed_end_ms": clip[1]}
+        return client.post("/report", headers=headers, data=json.dumps(body), content_type="application/json").get_json()
+    assert [send(c, you)["provisional"] for c in lines[:3]] == [True, True, False]
+    assert send(lines[3], other)["provisional"] is True        # someone else still can
+
+
+def test_every_module_goes_into_the_image():
+    """The Dockerfile copies the app's modules one by one, and .dockerignore lets only those through:
+    a new module missing from either only shows when the image fails to start."""
+    import glob
+    import os
+    root = os.path.join(os.path.dirname(__file__), "..", "..")
+    modules = {os.path.basename(p) for p in glob.glob(os.path.join(root, "web", "*.py"))}
+    dockerfile = open(os.path.join(root, "Dockerfile")).read()
+    dockerignore = open(os.path.join(root, ".dockerignore")).read().split()
+    for name in modules:
+        assert f"web/{name}" in dockerfile, f"{name} isn't copied by the Dockerfile"
+        assert f"!web/{name}" in dockerignore, f"{name} isn't let through by .dockerignore"

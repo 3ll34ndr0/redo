@@ -11,6 +11,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path[:0] = [HERE, os.path.join(HERE, "..")]
 
 import fixture  # noqa: E402
+import tokens  # noqa: E402
 
 DATA = tempfile.mkdtemp(prefix="extractos-test-")
 HAS_FFMPEG = shutil.which("ffmpeg") is not None
@@ -35,5 +36,7 @@ if HAS_FFMPEG:
 os.environ.update(DB_PATH=os.path.join(DATA, "redondos.db"), LIBRARY_PATH=os.path.join(DATA, "music"),
                   VOCALS_PATH=os.path.join(DATA, "vocals"),
                   SNIPPET_CACHE_DIR=os.path.join(DATA, "cache"), REPORTS_DB=os.path.join(DATA, "reports.db"),
-                  METRICS_PORT="0")
+                  METRICS_PORT="0",
+                  # /admin: tokens signed by the test key (tokens.py), not Cloudflare's
+                  ACCESS_TEAM_DOMAIN=tokens.TEAM, ACCESS_AUD=tokens.AUD, ACCESS_JWKS_FILE=tokens.JWKS_FILE)
 os.environ.pop("OTEL_EXPORTER_OTLP_ENDPOINT", None)

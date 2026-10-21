@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Un Audio | Reportes</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .bg-argentina { background: linear-gradient(180deg, #74ACDF 0%, #FFFFFF 50%, #74ACDF 100%); }
+        .card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
+        .play[data-playing] { background: #74ACDF; color: #fff; }
+    </style>
+</head>
+<body class="bg-argentina min-h-screen pb-20">
+    <header class="max-w-2xl mx-auto px-4 pt-8 pb-6">
+        <h1 class="text-2xl font-extrabold text-gray-800 tracking-tight"><a href="/">Un Audio</a> · Reportes</h1>
+        <p class="text-xs text-gray-600 truncate">Entraste como {{ admin }}</p>
+        <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+            {% set song_arg = '&song=' ~ (song | urlencode) if song else '' %}
+            {% for key, label in [('pending', 'Por revisar'), ('all', 'Todos')] %}
+            <a href="?show={{ key }}{{ song_arg }}"
+               class="px-3 py-1 rounded-full font-bold {{ 'bg-gray-800 text-white' if show == key else 'bg-white/80 text-gray-700' }}"
+               {% if show == key %}aria-current="page"{% endif %}>{{ label }} ({{ counts[key] }})</a>
+            {% endfor %}
+            {% if song %}
+            <span class="px-3 py-1 rounded-full bg-white/80 text-gray-700">{{ song_title }}
+                <a href="?show={{ show }}" class="ml-1 text-gray-500" aria-label="Ver todas las canciones">✕</a></span>
+            {% endif %}
+        </nav>
+    </header>
+
+    <main class="max-w-2xl mx-auto px-4 space-y-4">
+        {% for r in reports %}
+        <article class="report card rounded-2xl shadow-lg p-4 text-sm text-gray-700" data-id="{{ r.id }}">
+            <div class="flex items-start justify-between gap-3">
+                <div>
+                    <h2 class="font-bold text-gray-800"><a href="?show={{ show }}&song={{ r.song | urlencode }}" class="hover:underline">{{ r.title }}</a></h2>
+                    <p class="text-xs text-gray-500">#{{ r.id }} · {{ r.created_at | replace('T', ' ') | replace('Z', ' UTC') }}</p>
+                </div>
+                <span class="status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold
+                    {{ 'bg-amber-100 text-amber-800' if r.pending else ('bg-green-100 text-green-800' if r.status == 'accepted' else 'bg-gray-200 text-gray-700') }}">{{ r.status_label }}</span>
+            </div>
+            {% if r.line %}<p class="mt-2 italic">“{{ r.line }}”</p>{% endif %}
+            <dl class="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-1">
+                <dt class="text-gray-500">Problema</dt><dd class="problem font-bold">{{ r.problem_label }}</dd>
+                {% if r.query %}<dt class="text-gray-500">Buscó</dt><dd>{{ r.query }}</dd>{% endif %}
+                <dt class="text-gray-500">Servido</dt><dd class="font-mono">{{ r.served }}</dd>
+                {% if r.adjusted %}
+                <dt class="text-gray-500">Ajuste</dt>
+                <dd class="adjusted"><span class="font-mono">{{ r.adjusted }}</span>
+                    <span class="block text-xs text-gray-500">{% if r.shift_start %}inicio {{ r.shift_start }}{% endif %}{% if r.shift_start and r.shift_end %} · {% endif %}{% if r.shift_end %}fin {{ r.shift_end }}{% endif %}{% if not r.shift_start and not r.shift_end %}sin cambios{% endif %}</span></dd>
+                {% endif %}
+            </dl>
+            <div class="mt-3 flex flex-wrap gap-2">
+                <button type="button" class="play px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-600 font-bold" data-src="{{ r.served_url }}">▶ Servido</button>
+                {% if r.adjusted %}
+                <button type="button" class="play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold" data-src="{{ r.adjusted_url }}">▶ Ajuste</button>
+                {% endif %}
+            </div>
+        </article>
+        {% else %}
+        <p class="card rounded-2xl p-6 text-center text-gray-600">{{ 'Nada por revisar.' if show == 'pending' else 'Todavía no hay reportes.' }}</p>
+        {% endfor %}
+    </main>
+
+    <script>
+        // One clip at a time: the button that's playing says ■ and stops it on a second tap
+        const audio = new Audio();
+        let current = null;
+        const reset = () => { if (current) { delete current.dataset.playing; current.textContent = current.dataset.label; current = null; } };
+        audio.addEventListener('ended', reset);
+        audio.addEventListener('error', reset);
+        document.querySelectorAll('.play').forEach(button => {
+            button.dataset.label = button.textContent;
+            button.addEventListener('click', () => {
+                const again = current === button;
+                audio.pause(); reset();
+                if (again) return;
+                current = button;
+                button.dataset.playing = '1';
+                button.textContent = '■ Parar';
+                audio.src = button.dataset.src;
+                audio.play().catch(reset);
+            });
+        });
+    </script>
+</body>
+</html>

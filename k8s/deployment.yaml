@@ -44,6 +44,16 @@ spec:
               value: "300"
             - name: REPORTS_DB            # clip reports (¿No coincide?), on reports-pvc.yaml
               value: /reports/reports.db
+            # Timing reports applied at once until reviewed (provisional fixes, web/reports.py).
+            # Off here until tried on staging (k8s-dev turns it on). "0" also stops applying stored ones.
+            - name: AUTO_APPLY_REPORTS
+              value: "0"
+            # /admin pages: Cloudflare Access's token is checked against this team's keys and this
+            # application (access/tofu output "aud"). Not secret.
+            - name: ACCESS_TEAM_DOMAIN
+              value: unaudio.cloudflareaccess.com
+            - name: ACCESS_AUD
+              value: 34e57e0d311d24bfc635e8fd7095b847b1e85b376fcfdd39e65e75004165bdbf
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

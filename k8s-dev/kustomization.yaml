@@ -11,7 +11,7 @@ resources:
   - noindex.yaml
 images:
   - name: ghcr.io/3ll34ndr0/redo
-    newTag: 20d4e076e471df144c9af2ad6ca6fc42802deb15
+    newTag: 183fd3f9c2c2c3232146f365e974dfc3f0b788e5
 patches:
   - path: ingress.yaml
   - target: {kind: Ingress, name: extractos-old-name}
@@ -38,3 +38,5 @@ patches:
                 env:
                   - name: OTEL_SERVICE_NAME
                     value: unaudio-dev
+                  - name: AUTO_APPLY_REPORTS      # provisional fixes: tried here first
+                    value: "1"
