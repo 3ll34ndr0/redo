@@ -38,6 +38,24 @@ def test_search_without_results(client):
     assert "No se encontraron resultados" in page
 
 
+def test_link_preview_tags(client):
+    """Chat apps (WhatsApp, Telegram...) build the link preview from these; image and url must be absolute."""
+    page = client.get("/").get_data(as_text=True)
+    assert '<meta property="og:image" content="http://localhost/static/og.png">' in page
+    assert '<meta name="twitter:card" content="summary_large_image">' in page
+    assert client.get("/static/og.png").status_code == 200
+
+
+def test_link_preview_of_a_search_shows_the_phrase(client, monkeypatch):
+    monkeypatch.setattr(app_module, "SITE_URL", "https://unaudio.example")
+    page = client.get('/search?lyric=sale+sobre+"<b>').get_data(as_text=True)
+    assert '<meta property="og:title" content="“sale sobre &#34;&lt;b&gt;” en una canción de los Redondos">' in page
+    assert '<meta property="og:url" content="https://unaudio.example/search?lyric=sale%20sobre%20%22%3Cb%3E">' in page
+    assert '<meta property="og:image" content="https://unaudio.example/static/og.png">' in page
+    page = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
+    assert "Escuchala en Cancion De Prueba" in page
+
+
 def test_approximate_results_say_so(client):
     page = client.get("/search?lyric=puerto+de+la+luna").get_data(as_text=True)
     assert "Lo más parecido" in page

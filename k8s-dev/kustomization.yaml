@@ -38,5 +38,7 @@ patches:
                 env:
                   - name: OTEL_SERVICE_NAME
                     value: unaudio-dev
+                  - name: SITE_URL
+                    value: https://unaudio-dev.marso.ar
                   - name: AUTO_APPLY_REPORTS      # provisional fixes: tried here first
                     value: "1"

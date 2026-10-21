@@ -1,0 +1,65 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Link preview image (Open Graph / Twitter card) for unaudio. Source of og.png:
+     rsvg-convert -w 1200 -h 630 web/static/og.svg -o web/static/og.png   (needs the Inter font installed) -->
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <linearGradient id="sky" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#74ACDF"/>
+      <stop offset="0.5" stop-color="#FFFFFF"/>
+      <stop offset="1" stop-color="#74ACDF"/>
+    </linearGradient>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="140%">
+      <feDropShadow dx="0" dy="12" stdDeviation="18" flood-color="#1F2937" flood-opacity="0.18"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="630" fill="url(#sky)"/>
+
+  <text x="600" y="150" text-anchor="middle" font-family="Inter" font-weight="800" font-size="104"
+        fill="#1F2937" letter-spacing="-3">Un Audio</text>
+  <text x="600" y="215" text-anchor="middle" font-family="Inter" font-weight="500" font-size="36"
+        fill="#4B5563">Cuando la mejor respuesta está en una canción de los Redondos</text>
+
+  <!-- a result card: search box + the clip's waveform with the selected phrase -->
+  <g filter="url(#shadow)">
+    <rect x="150" y="270" width="900" height="270" rx="32" fill="#FFFFFF"/>
+  </g>
+  <rect x="190" y="305" width="820" height="76" rx="18" fill="#F3F4F6"/>
+  <circle cx="232" cy="341" r="13" fill="none" stroke="#9CA3AF" stroke-width="5"/>
+  <line x1="242" y1="351" x2="254" y2="363" stroke="#9CA3AF" stroke-width="5" stroke-linecap="round"/>
+  <text x="276" y="355" font-family="Inter" font-weight="500" font-size="34" fill="#6B7280">Buscá una frase…</text>
+  <rect x="868" y="313" width="130" height="60" rx="14" fill="#74ACDF"/>
+  <text x="933" y="353" text-anchor="middle" font-family="Inter" font-weight="700" font-size="28" fill="#FFFFFF">Buscar</text>
+
+  <!-- play button -->
+  <circle cx="240" cy="460" r="44" fill="#F6B40E"/>
+  <path d="M226 436 L262 460 L226 484 Z" fill="#FFFFFF"/>
+
+  <!-- waveform: bars outside the phrase grey, inside celeste -->
+  <g stroke-linecap="round" stroke-width="10">
+    <g stroke="#D1D5DB">
+      <line x1="320" y1="450" x2="320" y2="470"/><line x1="342" y1="440" x2="342" y2="480"/>
+      <line x1="364" y1="452" x2="364" y2="468"/><line x1="386" y1="436" x2="386" y2="484"/>
+      <line x1="408" y1="446" x2="408" y2="474"/>
+      <line x1="892" y1="442" x2="892" y2="478"/><line x1="914" y1="452" x2="914" y2="468"/>
+      <line x1="936" y1="438" x2="936" y2="482"/><line x1="958" y1="448" x2="958" y2="472"/>
+      <line x1="980" y1="454" x2="980" y2="466"/><line x1="1002" y1="444" x2="1002" y2="476"/>
+    </g>
+    <g stroke="#74ACDF">
+      <line x1="452" y1="430" x2="452" y2="490"/><line x1="474" y1="412" x2="474" y2="508"/>
+      <line x1="496" y1="424" x2="496" y2="496"/><line x1="518" y1="404" x2="518" y2="516"/>
+      <line x1="540" y1="420" x2="540" y2="500"/><line x1="562" y1="434" x2="562" y2="486"/>
+      <line x1="584" y1="408" x2="584" y2="512"/><line x1="606" y1="400" x2="606" y2="520"/>
+      <line x1="628" y1="418" x2="628" y2="502"/><line x1="650" y1="428" x2="650" y2="492"/>
+      <line x1="672" y1="410" x2="672" y2="510"/><line x1="694" y1="422" x2="694" y2="498"/>
+      <line x1="716" y1="406" x2="716" y2="514"/><line x1="738" y1="426" x2="738" y2="494"/>
+      <line x1="760" y1="416" x2="760" y2="504"/><line x1="782" y1="432" x2="782" y2="488"/>
+      <line x1="804" y1="414" x2="804" y2="506"/><line x1="826" y1="436" x2="826" y2="484"/>
+    </g>
+  </g>
+  <!-- the phrase's edges -->
+  <rect x="428" y="392" width="4" height="136" rx="2" fill="#1F2937"/>
+  <rect x="846" y="392" width="4" height="136" rx="2" fill="#1F2937"/>
+
+  <text x="600" y="598" text-anchor="middle" font-family="Inter" font-weight="700" font-size="30"
+        fill="#1F2937">unaudio.marso.ar</text>
+</svg>

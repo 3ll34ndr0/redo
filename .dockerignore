@@ -9,3 +9,4 @@
 !web/access.py
 !web/requirements.txt
 !web/templates/
+!web/static/og.png

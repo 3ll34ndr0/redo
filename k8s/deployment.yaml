@@ -40,6 +40,8 @@ spec:
             # Traces → Grafana Alloy's OTLP receiver (k3s-cluster repo, monitoring/) → Grafana Cloud
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: http://grafana-cloud-otel-receiver.monitoring.svc:4318
+            - name: SITE_URL              # absolute links in the link preview tags (og:url, og:image)
+              value: https://unaudio.marso.ar
             - name: SNIPPET_CACHE_MB      # app deletes the oldest clips above this
               value: "300"
             - name: REPORTS_DB            # clip reports (¿No coincide?), on reports-pvc.yaml
