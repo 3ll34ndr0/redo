@@ -97,13 +97,25 @@ def report_key(r):
     return f"{r['id']}@{r['created_at']}"
 
 
+def adjusted_ms(r):
+    """A report's adjustment (start_ms, end_ms): the admin's times if set on review (/admin), else
+    the visitor's; (None, None) if neither."""
+    if r.get("review_start_ms") is not None:
+        return r["review_start_ms"], r["review_end_ms"]
+    return r.get("fixed_start_ms"), r.get("fixed_end_ms")
+
+
 def from_report(r):
-    """The "adjust" fix a report asks for (a row of the reports database with its words:
-    first_tok..last_tok), as in timing_fixes.json; only the edges the visitor moved."""
+    """The fix a report asks for (a row of the reports database with its words: first_tok..last_tok),
+    as in timing_fixes.json: "delete" once reviewed so (status deleted), else "adjust" with only
+    the edges moved (adjusted_ms: the admin's, else the visitor's)."""
     fix = {"report": report_key(r), "song": r["song"], "action": "adjust", "first": r["first_tok"],
            "last": r["last_tok"], "first_word": r["first_word"], "last_word": r["last_word"]}
-    if r["fixed_start_ms"] != r["start_ms"]:
-        fix["start"] = r["fixed_start_ms"] / 1000
-    if r["fixed_end_ms"] != r["end_ms"]:
-        fix["end"] = r["fixed_end_ms"] / 1000
+    if r.get("status") == "deleted":
+        return dict(fix, action="delete")
+    start, end = adjusted_ms(r)
+    if start != r["start_ms"]:
+        fix["start"] = start / 1000
+    if end != r["end_ms"]:
+        fix["end"] = end / 1000
     return fix

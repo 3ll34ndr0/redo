@@ -336,3 +336,58 @@ def test_phone_width_has_no_sideways_scroll(browser, base_url):
     page.locator(".report-toggle").first.click()
     assert page.evaluate("document.documentElement.scrollWidth") <= 375
     page.close()
+
+
+# --- admin (behind Cloudflare Access: here a token signed by the tests' key, tokens.py)
+
+def test_admin_records_a_decision(page, base_url):
+    import json
+    import tokens
+    body = json.dumps({"song": "otra_cancion", "start_ms": 1000, "end_ms": 2500, "problem": "wrong_phrase",
+                       "line": "Línea para revisar"}).encode()
+    request = urllib.request.Request(base_url + "/report", data=body, headers={"Content-Type": "application/json"})
+    report_id = json.load(urllib.request.urlopen(request))["id"]
+    assert page.goto(base_url + "/admin/reports").status == 404                # no token: no page
+    page.set_extra_http_headers(tokens.headers())
+    page.goto(base_url + "/admin/reports")
+    card = page.locator(f'.report[data-id="{report_id}"]')
+    expect(card).to_contain_text("Línea para revisar")
+    card.locator(".note").fill("no es esta frase, es la siguiente")
+    card.get_by_role("button", name="Está bien así").click()                  # the browser's own fetch
+    expect(card.locator(".status")).to_have_text("Revisado")
+    expect(card.locator(".reviewed")).to_contain_text("Está bien así")
+    with sqlite3.connect(os.environ["REPORTS_DB"]) as conn:
+        assert conn.execute("SELECT decision, note, status FROM reports WHERE id = ?", (report_id,)).fetchone() == \
+            ("nothing", "no es esta frase, es la siguiente", "revoked")
+
+
+def test_admin_sets_its_own_times_on_the_waveform(page, base_url):
+    import json
+    import tokens
+    body = json.dumps({"song": "cancion_de_prueba", "start_ms": 9300, "end_ms": 10100, "problem": "wrong_phrase"}).encode()
+    request = urllib.request.Request(base_url + "/report", data=body, headers={"Content-Type": "application/json"})
+    report_id = json.load(urllib.request.urlopen(request))["id"]
+    page.set_extra_http_headers(tokens.headers())
+    page.goto(base_url + "/admin/reports")
+    card = page.locator(f'.report[data-id="{report_id}"]')
+    apply = card.get_by_role("button", name="Aplicar el ajuste")
+    expect(apply).to_be_disabled()                                           # no adjustment yet
+    card.locator(".tune summary").click()
+    expect(card.locator(".wave")).to_have_attribute("data-state", "ready")
+    assert card.locator(".report-start").inner_text() == "0:09.3"
+    card.locator(".wave-handle[data-edge=start]").press("ArrowLeft")
+    card.locator(".wave-handle[data-edge=end]").press("Shift+ArrowRight")
+    assert (card.locator(".report-start").inner_text(), card.locator(".report-end").inner_text()) == ("0:09.2", "0:11.1")
+    expect(apply).to_be_enabled()
+    apply.click()
+    expect(card.locator(".status")).to_have_text("Ajuste aplicado")
+    with sqlite3.connect(os.environ["REPORTS_DB"]) as conn:
+        assert conn.execute("SELECT decision, status, review_start_ms, review_end_ms FROM reports WHERE id = ?",
+                            (report_id,)).fetchone() == ("apply", "accepted", 9200, 11100)
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    assert page.locator('.audio-card[data-served*="/9200-11100.mp3"]').count() == 1    # live in the search
+    # take it back (the next engine's report needs the phrase where the fixture has it)
+    page.goto(base_url + "/admin/reports")
+    assert page.evaluate("""id => fetch(`/admin/reports/${id}/decision`, {method: 'POST',
+        headers: {'Content-Type': 'application/json'}, body: JSON.stringify({decision: 'nothing'})}).then(r => r.status)""",
+        report_id) == 200

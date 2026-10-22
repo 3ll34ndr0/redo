@@ -9,11 +9,13 @@ import threading
 import time
 import os
 import functools
+import hashlib
+import urllib.parse
 
 import observability as obs
 import access
 import fixes
-from reports import OLD_PROBLEMS, PROBLEMS, ReportStore
+from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
 
 app = Flask(__name__)
@@ -36,6 +38,9 @@ REPORTS_RECHECK_S = float(os.getenv("REPORTS_RECHECK_S", "10"))   # how often re
 # off: new reports wait for a review and the provisional ones already stored stop being applied.
 AUTO_APPLY = os.getenv("AUTO_APPLY_REPORTS", "1") != "0"
 AUTO_APPLY_MAX_SHIFT_MS = 5000        # an edge moved more than this waits for a review (the editor shows ±5 s)
+# Each card can show the stanza before, the hit's stanza and the one after,
+# and from there the whole song, the clip highlighted.
+STANZA_CONTEXT = os.getenv("STANZA_CONTEXT", "0") == "1"
 AUTO_APPLY_PER_DAY = int(os.getenv("AUTO_APPLY_PER_DAY", "5"))    # provisional fixes per visitor per day
 CLIP_MAX_AGE = 86400                  # seconds clips may be cached (browser, Cloudflare)
 MAX_FFMPEG = 2                        # clips cut at the same time; more requests wait
@@ -65,12 +70,13 @@ obs.init(app, SNIPPET_DIR)      # metrics port, JSON logs, traces (see observabi
 # Search index over every sung word of every song (a few thousand rows), loaded once
 # and rebuilt when the database file changes or when the provisional timing fixes from
 # visitors' reports change (checked every REPORTS_RECHECK_S, and right after a report).
-_index = {"mtime": None, "rows": None, "baked": set(), "fixes": None, "checked": 0.0, "index": None}
+_index = {"mtime": None, "rows": None, "baked": set(), "stanzas": {}, "fixes": None, "checked": 0.0, "index": None}
 _index_lock = threading.Lock()
 
 
 def load_base():
-    """The search database: its rows and the reports already baked into it (fixes table)."""
+    """The search database: its rows, the reports already baked into it (fixes table) and
+    the stanza of each line ({song: {line: stanza}})."""
     with obs.tracer.start_as_current_span("index.load"):
         # read-only: on the server the database sits on a read-only mount
         with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
@@ -82,7 +88,14 @@ def load_base():
                 baked = {r for (r,) in conn.execute("SELECT report FROM fixes")}
             except sqlite3.OperationalError:     # built before the fixes table
                 baked = set()
-    return rows, baked
+            stanzas = {}
+            try:
+                for song, line, stanza in conn.execute("SELECT DISTINCT song, line, stanza FROM words"
+                                                       " WHERE stanza IS NOT NULL"):
+                    stanzas.setdefault(song, {})[line] = stanza
+            except sqlite3.OperationalError:     # built before stanza numbers: no stanzas shown
+                pass
+    return rows, baked, stanzas
 
 
 def with_fixes(rows, reports_rows):
@@ -92,9 +105,9 @@ def with_fixes(rows, reports_rows):
     words = {}
     for song, _, start, end, _, tok, orig in rows:
         words.setdefault(song, {})[tok] = (orig, start, end)
-    times, _, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
+    times, deleted, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
     out = [(song, w, round(times[song][tok][0], 3), round(times[song][tok][1], 3), line, tok, orig)
-           for song, w, _, _, line, tok, orig in rows]
+           for song, w, _, _, line, tok, orig in rows if (song, tok) not in deleted]
     return out, applied, problems
 
 
@@ -107,13 +120,13 @@ def get_index():
         t0 = time.perf_counter()
         base_changed = _index["mtime"] != mtime
         if base_changed:
-            _index["rows"], _index["baked"] = load_base()
+            _index["rows"], _index["baked"], _index["stanzas"] = load_base()
         reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]
-                        and (AUTO_APPLY or r["status"] == "accepted")] if reports else []
+                        and (AUTO_APPLY or r["status"] in ("accepted", "deleted"))] if reports else []
         _index["checked"] = now
         if base_changed or reports_rows != _index["fixes"]:
             rows, applied, problems = with_fixes(_index["rows"], reports_rows)
-            ix = Index(rows)
+            ix = Index(rows, _index["stanzas"])
             _index.update(mtime=mtime, fixes=reports_rows, index=ix)
             obs.INDEX_SONGS.set(len(ix.songs))
             obs.INDEX_WORDS.set(len(rows))
@@ -158,6 +171,19 @@ except Exception as e:      # /healthz will report it (500) and the probes keep 
     obs.log("index_load_failed", level="error", error=repr(e))
 
 
+@functools.cache
+def _static_version(filename):
+    with open(os.path.join(app.static_folder, filename), 'rb') as f:
+        return hashlib.sha256(f.read()).hexdigest()[:12]
+
+
+@app.template_global()
+def static_url(filename):
+    """A page's script with its content's hash in the URL (?v=): a new version is a new URL, so
+    neither browsers nor Cloudflare serve an old copy (or a 404 cached before a deploy)."""
+    return url_for('static', filename=filename, v=_static_version(filename))
+
+
 @app.context_processor
 def site_url():
     return {'site_url': SITE_URL or request.url_root.rstrip("/")}
@@ -199,6 +225,7 @@ def search():
             'song': title(hit.song),
             'kind': hit.kind,
             'tokens': tokens,
+            'stanzas': ix.stanzas_around(hit) if STANZA_CONTEXT else [],
             'filename': file_name(hit.song, tokens),
             'time': clock(hit.start),
             'clip': clip_url(hit.song, hit.start, hit.end),
@@ -474,7 +501,12 @@ PROBLEM_LABELS = {'timing': 'Está mal cortado', 'wrong_phrase': 'No es esta fra
                   'ends_early': 'Termina antes', 'ends_late': 'Termina tarde'}
 assert set(PROBLEM_LABELS) == set(PROBLEMS) | set(OLD_PROBLEMS)
 STATUS_LABELS = {None: 'Sin revisar', 'provisional': 'Aplicado provisoriamente',
-                 'accepted': 'Aceptado', 'revoked': 'Rechazado'}
+                 'accepted': 'Ajuste aplicado', 'deleted': 'Palabras borradas', 'revoked': 'Revisado'}
+# The admin's choices (reports.DECISIONS), in the order the page shows them
+DECISION_LABELS = {'apply': 'Aplicar el ajuste', 'delete': 'Borrar las palabras', 'lyrics': 'Corregí la letra',
+                   'chorus': 'Agregué el coro', 'leave': 'Algo corrido, dejarlo', 'other': 'Otro arreglo',
+                   'nothing': 'Está bien así'}
+assert set(DECISION_LABELS) == set(DECISIONS)
 PENDING = (None, 'provisional')       # what still needs a review
 
 
@@ -500,10 +532,25 @@ def clock_ms(ms):
 
 def admin_report(r):
     """A stored report as the admin list shows it."""
+    words = r['first_tok'] is not None
+    adjusted = r['fixed_start_ms'] is not None and (r['fixed_start_ms'], r['fixed_end_ms']) != (r['start_ms'], r['end_ms'])
+    # apply and delete need the words (apply also an adjustment: the visitor's, or one set on the
+    # page's editor, see admin_decide); the rest are always possible
+    choices = [(k, v) for k, v in DECISION_LABELS.items() if k not in ('apply', 'delete') or words]
+    # the editor starts from the adjustment (the admin's when there is one, else the visitor's)
+    start, end = fixes.adjusted_ms(r)
     item = dict(r, title=title(r['song']), problem_label=PROBLEM_LABELS.get(r['problem'], r['problem']),
                 status_label=STATUS_LABELS.get(r['status'], r['status']), pending=r['status'] in PENDING,
+                decision_label=DECISION_LABELS.get(r['decision']), choices=choices,
+                words=f"{r['first_word']} … {r['last_word']}" if words and r['first_tok'] != r['last_tok']
+                      else r['first_word'] if words else None,
                 served=f"{clock_ms(r['start_ms'])} – {clock_ms(r['end_ms'])}",
-                served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']))
+                served_url=url_for('clip', song=r['song'], start_ms=r['start_ms'], end_ms=r['end_ms']),
+                visitor_adjusted=adjusted, edit_start=r['start_ms'] if start is None else start,
+                edit_end=r['end_ms'] if end is None else end)
+    if r['review_start_ms'] is not None:
+        item.update(reviewed_times=f"{clock_ms(r['review_start_ms'])} – {clock_ms(r['review_end_ms'])}",
+                    reviewed_url=url_for('clip', song=r['song'], start_ms=r['review_start_ms'], end_ms=r['review_end_ms']))
     if r['fixed_start_ms'] is not None:
         shift = lambda ms: f"{ms / 1000:+.1f} s".replace('-', '−') if ms else None
         item.update(adjusted=f"{clock_ms(r['fixed_start_ms'])} – {clock_ms(r['fixed_end_ms'])}",
@@ -532,6 +579,59 @@ def admin_reports():
         rows = [r for r in rows if r['status'] in PENDING]
     return render_template('admin_reports.html', reports=[admin_report(r) for r in rows], show=show,
                            song=song, song_title=title(song) if song else None, counts=counts, admin=g.admin)
+
+
+def same_origin():
+    """A change from our own page: JSON (a form on another site can't send it without asking first,
+    and we never allow that: no CORS) and, when the browser says where from, this host."""
+    if not request.is_json:
+        return False
+    origin = request.headers.get('Origin')
+    if origin and urllib.parse.urlsplit(origin).netloc != request.host:
+        return False
+    return request.headers.get('Sec-Fetch-Site', 'same-origin') in ('same-origin', 'none')
+
+
+@app.route('/admin/reports/<int:report_id>/decision', methods=['POST'])
+@admin_only
+def admin_decide(report_id):
+    """Record a review: {"decision": one of reports.DECISIONS, "note": optional; for "apply" also
+    "start_ms", "end_ms": optional, the times set on the page's editor (else the visitor's
+    adjustment)}. "apply" and "delete" change the search at once (also in production, where
+    visitors' reports wait for a review)."""
+    if reports is None:
+        abort(503)
+    if not same_origin():
+        abort(403)
+    data = request.get_json(silent=True)
+    report = reports.get(report_id)
+    if report is None:
+        abort(404)
+    decision = data.get('decision') if isinstance(data, dict) else None
+    if decision not in dict(admin_report(report)['choices']):
+        abort(400, "decision not possible for this report")
+    note = str(data.get('note') or '')[:500] or None
+    times = (None, None)                    # the admin's own times: only for apply, when not the visitor's
+    if decision == 'apply':
+        start, end = data.get('start_ms'), data.get('end_ms')
+        if (start is None) != (end is None):
+            abort(400, "start_ms and end_ms go together")
+        if start is not None:
+            start, end = _ms(start, "start_ms"), _ms(end, "end_ms")
+            _clip_range(start, end, "adjustment")
+        else:
+            start, end = report['fixed_start_ms'], report['fixed_end_ms']
+        if start is None or (start, end) == (report['start_ms'], report['end_ms']):
+            abort(400, "nothing to apply: the edges are where the clip was served")
+        if (start, end) != (report['fixed_start_ms'], report['fixed_end_ms']):
+            times = (start, end)
+    reports.decide(report_id, decision, note, g.admin, times)
+    _index["checked"] = 0.0                 # the next search already has it
+    obs.REPORT_REVIEWS.labels(decision).inc()
+    obs.log("report_review", id=report_id, song=report['song'], decision=decision, status=DECISIONS[decision],
+            own_times=times != (None, None) or None)
+    item = admin_report(reports.get(report_id))
+    return jsonify(status=item['status'], status_label=item['status_label'], decision_label=item['decision_label'])
 
 
 if __name__ == "__main__":

@@ -125,3 +125,48 @@ def test_each_site_has_its_own_files(monkeypatch, namespace, export, reviewed):
     fresh = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(fresh)
     assert (fresh.EXPORT, fresh.REVIEWED) == (export, reviewed)
+
+
+def site(id, decision, status, **fields):
+    """A report decided on the site (/admin)."""
+    fields = dict(dict(note=None, reviewed_at="2026-10-21T14:00:00Z", review_start_ms=None, review_end_ms=None), **fields)
+    return report(id, status, decision=decision, reviewed_by="admin@example.com", **fields)
+
+
+def test_pull_takes_the_sites_decisions(tmp_path, capsys):
+    reviewed, fixes_file = tmp_path / "reports-reviewed.json", tmp_path / "timing_fixes.json"
+    rows = [site(1, "apply", "accepted", note="bien"),                      # the visitor's adjustment
+            site(2, "apply", "accepted", review_start_ms=9100, review_end_ms=10300),   # the admin's own times
+            site(3, "delete", "deleted"),
+            site(4, "nothing", "revoked"),
+            report(5, "provisional")]                                        # not decided on the site
+    tool.merge_site_decisions(rows, str(reviewed), str(fixes_file))
+    fixes_ = {f["report"]: f for f in json.loads(fixes_file.read_text())}
+    assert set(fixes_) == {tool.report_key(r) for r in rows[:3]}
+    one, two, three = (fixes_[tool.report_key(r)] for r in rows[:3])
+    assert (one["action"], one["start"], one["note"], one["added"]) == ("adjust", 9.0, "bien", "2026-10-21") and "end" not in one
+    assert (two["start"], two["end"]) == (9.1, 10.3)
+    assert three["action"] == "delete" and "start" not in three
+    decided = json.loads(reviewed.read_text())
+    assert [decided[tool.report_key(r)]["decision"] for r in rows[:4]] == \
+        ["apply the adjustment", "apply the adjustment", "delete the words", "nothing wrong"]
+    assert tool.report_key(rows[4]) not in decided
+    assert tool.status_changes(rows, decided) == []                          # the site already has them
+    assert "4 new decision(s)" in capsys.readouterr().out
+
+
+def test_pull_takes_each_site_decision_once(tmp_path, monkeypatch, capsys):
+    reviewed, fixes_file = tmp_path / "reports-reviewed.json", tmp_path / "timing_fixes.json"
+    rows = [site(1, "apply", "accepted")]
+    tool.merge_site_decisions(rows, str(reviewed), str(fixes_file))
+    # reviewed again here: nothing wrong after all. A second pull doesn't bring the old one back
+    answers(monkeypatch, "n", "")
+    tool.review(rows, str(reviewed), ids=[1], db="/nonexistent", fixes_path=str(fixes_file))
+    tool.merge_site_decisions(rows, str(reviewed), str(fixes_file))
+    assert json.loads(fixes_file.read_text()) == []
+    # ... until the site decides it again
+    rows[0].update(decision="delete", status="deleted", reviewed_at="2026-10-22T09:00:00Z")
+    capsys.readouterr()
+    tool.merge_site_decisions(rows, str(reviewed), str(fixes_file))
+    assert [f["action"] for f in json.loads(fixes_file.read_text())] == ["delete"]
+    assert "1 new decision(s)" in capsys.readouterr().out

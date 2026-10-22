@@ -3,7 +3,7 @@
 
 Reads a word alignment ({song: [[word, start, end], ...]}) and writes SQLite:
 
-- words(song, i, w, start, end, line, tok, orig): every sung word in order,
+- words(song, i, w, start, end, line, tok, orig, stanza): every sung word in order,
   normalized with web/textnorm.py (no accents/punctuation). The app searches
   phrases of any length on this table. `orig` is the word as written in the
   lyrics file, `tok` its index (one written word can give several normalized
@@ -50,19 +50,28 @@ def clean(word):
 
 
 def line_numbers(song, words):
-    """Line number of each aligned word, from the lyrics file it was aligned with.
+    """(line, stanza) number of each aligned word, from the lyrics file it was aligned with.
 
     ctc_align.py aligns the whitespace-separated words of sung/<song>.txt (or of
     the corpus file) minus the ones without letters ("—"), in order. Try each
     candidate file and keep the first whose words match the alignment; None if
     none does (the file was edited after aligning: re-run ctc_align.py).
+    Lines are counted without the blank ones; a blank line starts a new stanza.
     """
     for path in (os.path.join(SUNG, f"{song}.txt"), lyrics_path(song)):
         if not path or not os.path.exists(path):
             continue
+        lines, stanza, blank = [], 0, False
         with open(path, encoding="utf-8") as f:
-            lines = [l.split() for l in f if l.strip()]
-        file_words = iter((w, n) for n, line in enumerate(lines) for w in line)
+            for l in f:
+                if not l.strip():
+                    blank = True
+                    continue
+                if blank and lines:
+                    stanza += 1
+                blank = False
+                lines.append((l.split(), stanza))
+        file_words = iter((w, (n, st)) for n, (line, st) in enumerate(lines) for w in line)
         numbers = []
         for w, _, _ in words:
             for fw, n in file_words:          # skips unaligned file words
@@ -108,7 +117,7 @@ def main():
         os.remove(tmp)
     conn = sqlite3.connect(tmp)
     conn.execute("CREATE TABLE words (song TEXT, i INTEGER, w TEXT, start REAL, end REAL,"
-                 " line INTEGER, tok INTEGER, orig TEXT, PRIMARY KEY (song, i))")
+                 " line INTEGER, tok INTEGER, orig TEXT, stanza INTEGER, PRIMARY KEY (song, i))")
     n_words, no_lines = 0, []
     for song, words in sorted(data.items()):
         numbers = line_numbers(song, words)
@@ -116,10 +125,11 @@ def main():
             no_lines.append(song)
         i = 0
         for tok, w, s, e in fixed[song]:
-            line = numbers[tok] if numbers else None
+            line, stanza = numbers[tok] if numbers else (None, None)
             # one aligned token can normalize to several words ("to-to-todo"): share its timing
             for part in textnorm.words(w):
-                conn.execute("INSERT INTO words VALUES (?, ?, ?, ?, ?, ?, ?, ?)", (song, i, part, s, e, line, tok, w))
+                conn.execute("INSERT INTO words VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                             (song, i, part, s, e, line, tok, w, stanza))
                 i += 1
         n_words += i
     conn.execute("CREATE INDEX words_w ON words (w)")
