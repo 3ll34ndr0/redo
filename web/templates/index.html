@@ -8,7 +8,7 @@
     {# Link previews (WhatsApp, Telegram, Slack, X…): a searched phrase shared as /search?lyric=... shows the phrase #}
     {% set og_title = ('“' ~ query ~ '” en una canción de los Redondos') if query else 'Un Audio: la frase justa de los Redondos' %}
     {% set og_description = ('Escuchala en ' ~ results[0].song ~ ', cortada justo donde la cantan.') if results
-        else 'Buscá una frase de Patricio Rey y sus Redonditos de Ricota y escuchá el pedacito exacto de la canción donde la cantan. Para mandarlo como respuesta.' %}
+        else 'Buscá una frase de los Redondos y escuchá el pedacito exacto de la canción donde la cantan. Para mandarlo como respuesta.' %}
     {% set og_url = site_url ~ (('/search?lyric=' ~ (query | urlencode)) if query else '/') %}
     <meta name="description" content="{{ og_description }}">
     <link rel="canonical" href="{{ og_url }}">
