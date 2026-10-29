@@ -36,7 +36,9 @@ def transcribe(audio, filename, content_type):
     # `language` is a hint for the model, not a constraint
     body, body_type = _multipart({'language': 'es', 'response_format': 'json'}, 'file', filename, content_type, audio)
     req = urllib.request.Request(URL, data=body, method='POST', headers={
-        'Authorization': f"Bearer {os.environ['ORCHARDRUN_API_KEY']}", 'Content-Type': body_type})
+        'Authorization': f"Bearer {os.environ['ORCHARDRUN_API_KEY']}", 'Content-Type': body_type,
+        # Orchardrun's Cloudflare refuses urllib's default (Python-urllib/3.x): 403, error code 1010
+        'User-Agent': 'unaudio (+https://unaudio.marso.ar)'})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT_S) as resp:
             answer = json.load(resp)

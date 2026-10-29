@@ -456,6 +456,7 @@ def test_stt_sends_a_multipart_form(monkeypatch):
     assert stt.transcribe(b"OPUS", "grabacion.webm", "audio/webm") == "La luna sale."
     req = sent["req"]
     assert req.get_header("Authorization") == "Bearer test-key"
+    assert not req.get_header("User-agent").startswith("Python-urllib")     # refused by Orchardrun's Cloudflare
     msg = email.parser.BytesParser().parsebytes(b"Content-Type: " + req.get_header("Content-type").encode() + b"\r\n\r\n" + req.data)
     parts = {p.get_param("name", header="content-disposition"): p for p in msg.get_payload()}
     assert parts["language"].get_payload() == "es"
