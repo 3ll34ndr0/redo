@@ -59,6 +59,15 @@ spec:
               value: unaudio.cloudflareaccess.com
             - name: ACCESS_AUD
               value: 34e57e0d311d24bfc635e8fd7095b847b1e85b376fcfdd39e65e75004165bdbf
+            # Mic button (speech to text, web/stt.py). Secret made by hand in each namespace:
+            #   kubectl -n <ns> create secret generic unaudio-secrets --from-literal=ORCHARDRUN_API_KEY=...
+            # optional: without it the site runs without the mic button.
+            - name: ORCHARDRUN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: unaudio-secrets
+                  key: ORCHARDRUN_API_KEY
+                  optional: true
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

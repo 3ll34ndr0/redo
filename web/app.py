@@ -15,6 +15,7 @@ import urllib.parse
 import observability as obs
 import access
 import fixes
+import stt
 from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
 
@@ -47,6 +48,8 @@ MAX_FFMPEG = 2                        # clips cut at the same time; more request
 # The site's public address, for the link preview tags (og:url, og:image must be absolute). Behind
 # Cloudflare → Traefik the request arrives over http, so it's set in k8s/; locally the request's own.
 SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
+# The mic button (stt.py): a few seconds of speech, Opus/AAC at the browser's bitrate, is ~100 kB.
+MAX_RECORDING_BYTES = 1024 * 1024
 
 
 def client_ip():
@@ -186,7 +189,7 @@ def static_url(filename):
 
 @app.context_processor
 def site_url():
-    return {'site_url': SITE_URL or request.url_root.rstrip("/")}
+    return {'site_url': SITE_URL or request.url_root.rstrip("/"), 'voice_search': stt.enabled()}
 
 
 @app.route('/')
@@ -246,6 +249,37 @@ def search():
 @limiter.limit("120/minute")
 def suggest():
     return jsonify([{'text': text, 'song': title(song)} for text, song in get_index().suggest(request.args.get('q', ''))])
+
+
+@app.route('/transcribe', methods=['POST'])
+@limiter.limit("6/minute;60/day")
+# Every transcription is a paid API call: a cap for the whole site too (holds with faked IP headers)
+@limiter.shared_limit("500/day", scope="all-transcriptions", key_func=lambda: "all")
+def transcribe():
+    """The mic button: a recording (multipart field "audio") → {"text": what was said}."""
+    if not stt.enabled():
+        abort(404)
+    if (request.content_length or 0) > MAX_RECORDING_BYTES + 4096:     # before reading it
+        abort(413)
+    audio = request.files.get('audio')
+    if audio is None or not (audio.mimetype or '').startswith('audio/'):
+        abort(400, "audio file expected")
+    data = audio.read(MAX_RECORDING_BYTES + 1)
+    if not data or len(data) > MAX_RECORDING_BYTES:
+        abort(413 if data else 400)
+    t0 = time.perf_counter()
+    try:
+        with obs.tracer.start_as_current_span("stt"):
+            text = stt.transcribe(data, audio.filename or 'grabacion', audio.mimetype)
+    except stt.Unavailable as e:
+        obs.TRANSCRIPTIONS.labels('failed').inc()
+        obs.log("transcribe", level="error", outcome="failed", error=str(e), bytes=len(data))
+        return jsonify(error="unavailable"), 502
+    outcome = 'text' if text else 'empty'
+    obs.TRANSCRIPTIONS.labels(outcome).inc()
+    obs.log("transcribe", outcome=outcome, text=text[:200], bytes=len(data),
+            duration_ms=round((time.perf_counter() - t0) * 1000))
+    return jsonify(text=text[:200])
 
 
 def prune_cache():

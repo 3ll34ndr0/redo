@@ -48,6 +48,9 @@
         .stanzas .stanza[data-where="hit"] { color: #374151; }
         .lyric mark, .stanzas mark { background: #F6B40E55; color: inherit; border-radius: 3px; padding: 0 2px; }
         #suggestions li[aria-selected="true"] { background: #74ACDF22; }
+        .mic[data-state="recording"] { background: #dc2626; border-color: #dc2626; color: white; animation: pulse 1s infinite; }
+        .mic[data-state="sending"] { cursor: progress; opacity: 0.6; }
+        @keyframes pulse { 50% { opacity: 0.7; } }
 {{ wave.styles() }}    </style>
 </head>
 <body class="bg-argentina min-h-screen pb-20">
@@ -64,11 +67,17 @@
                     autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false"
                     placeholder="Ej: 'todo un palo' o 'ñam fri frufi'..." 
                     class="w-full min-w-0 px-6 py-4 rounded-xl focus:outline-none text-lg text-gray-700">
+                {% if voice_search %}
+                {# shown by the script below where the browser can record (HTTPS or localhost) #}
+                <button type="button" id="mic" hidden data-state="idle" aria-label="Decir la frase"
+                    class="mic shrink-0 mr-2 px-4 py-4 rounded-xl font-bold border-2 border-[#74ACDF] text-[#74ACDF]">🎤</button>
+                {% endif %}
                 <button type="submit" 
                     class="btn-celeste text-white px-8 py-4 rounded-xl font-bold shadow-md">
                     BUSCAR
                 </button>
             </form>
+            <p id="mic-status" class="absolute left-0 right-0 top-full mt-2 text-center text-sm text-gray-700" aria-live="polite"></p>
             <ul id="suggestions" role="listbox" hidden
                 class="absolute left-0 right-0 top-full mt-2 z-10 bg-white rounded-xl shadow-2xl overflow-hidden"></ul>
         </div>
@@ -421,6 +430,70 @@
         }
     });
     input.addEventListener('blur', close);
+
+    // Mic button: say (or sing) the phrase; the server turns it into text (/transcribe, Orchardrun)
+    // and it's searched. Tap to start, tap again to stop; it stops by itself after MIC_MAX_MS.
+    const mic = document.getElementById('mic'), micStatus = document.getElementById('mic-status');
+    const MIC_MAX_MS = 8000;
+    const MIC_LABELS = { idle: '🎤', recording: '■', sending: '…' };
+    if (mic && navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder) {
+        mic.hidden = false;
+        let recorder, stopTimer;
+
+        function setMic(state, message = '') {
+            mic.dataset.state = state;
+            mic.textContent = MIC_LABELS[state];
+            mic.setAttribute('aria-label', state === 'recording' ? 'Terminar de grabar' : 'Decir la frase');
+            micStatus.textContent = message;
+        }
+
+        async function send(blob) {
+            setMic('sending', 'Escuchando lo que dijiste…');
+            const type = (blob.type || 'audio/webm').split(';')[0];
+            const body = new FormData();
+            body.append('audio', new File([blob], 'grabacion.' + (type.split('/')[1] || 'webm'), { type }));
+            try {
+                const r = await fetch('/transcribe', { method: 'POST', body });
+                if (!r.ok) {
+                    setMic('idle', r.status === 429 ? 'Demasiadas grabaciones seguidas, probá más tarde.' : 'No se pudo entender la grabación. Probá de nuevo o escribila.');
+                    return;
+                }
+                const { text } = await r.json();
+                if (!text) { setMic('idle', 'No se escuchó nada. Probá de nuevo, más cerca del micrófono.'); return; }
+                input.value = text;
+                form.submit();
+            } catch (err) {
+                setMic('idle', 'No se pudo enviar la grabación.');
+            }
+        }
+
+        async function start() {
+            let stream;
+            try {
+                stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            } catch (err) {
+                setMic('idle', 'Sin permiso para usar el micrófono.');
+                return;
+            }
+            const chunks = [];
+            recorder = new MediaRecorder(stream);
+            recorder.addEventListener('dataavailable', e => { if (e.data.size) chunks.push(e.data); });
+            recorder.addEventListener('stop', () => {
+                clearTimeout(stopTimer);
+                stream.getTracks().forEach(t => t.stop());       // the browser's "recording" mark goes away
+                send(new Blob(chunks, { type: recorder.mimeType }));
+            });
+            recorder.start();
+            close();
+            setMic('recording', 'Decí la frase y tocá ■ al terminar.');
+            stopTimer = setTimeout(() => recorder.state === 'recording' && recorder.stop(), MIC_MAX_MS);
+        }
+
+        mic.addEventListener('click', () => {
+            if (mic.dataset.state === 'recording') recorder.stop();
+            else if (mic.dataset.state === 'idle') start();
+        });
+    }
     </script>
 
 </body>

@@ -61,7 +61,8 @@ jobs:
 
   browser-tests:
     needs: unit-tests
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: it moved to 26.04 (2026-10-28), which Playwright 1.55's browsers don't support
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v5
 
