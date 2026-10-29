@@ -9,7 +9,7 @@ WORKDIR /app
 COPY web/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-COPY web/app.py web/search.py web/textnorm.py web/observability.py web/reports.py web/fixes.py web/access.py ./
+COPY web/app.py web/search.py web/textnorm.py web/observability.py web/reports.py web/fixes.py web/access.py web/stt.py ./
 COPY web/templates/ templates/
 COPY web/static/og.png web/static/wave.js static/
 

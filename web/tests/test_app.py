@@ -376,3 +376,87 @@ def test_scripts_have_their_version_in_the_url(client):
     page = client.get("/").get_data(as_text=True)
     url = re.search(r'src="(/static/wave\.js\?v=[0-9a-f]{12})"', page).group(1)
     assert client.get(url).status_code == 200
+
+
+def recording(data=b"fake opus", mimetype="audio/webm"):
+    import io
+    return {"audio": (io.BytesIO(data), "grabacion.webm", mimetype)}
+
+
+@pytest.fixture
+def orchardrun(monkeypatch):
+    """Speech to text turned on, the service faked: answers what `said` holds (or fails)."""
+    import stt
+    calls, said = [], {"text": "la luna sale"}
+    monkeypatch.setenv("ORCHARDRUN_API_KEY", "test-key")
+
+    def fake(audio, filename, content_type):
+        calls.append((audio, filename, content_type))
+        if isinstance(said["text"], Exception):
+            raise said["text"]
+        return said["text"]
+    monkeypatch.setattr(stt, "transcribe", fake)
+    return calls, said
+
+
+def test_mic_button_only_with_a_key(client, monkeypatch):
+    monkeypatch.delenv("ORCHARDRUN_API_KEY", raising=False)
+    assert 'id="mic"' not in client.get("/").get_data(as_text=True)
+    assert client.post("/transcribe", data=recording()).status_code == 404
+    monkeypatch.setenv("ORCHARDRUN_API_KEY", "test-key")
+    assert 'id="mic"' in client.get("/").get_data(as_text=True)
+
+
+def test_transcribe(client, orchardrun):
+    calls, _ = orchardrun
+    before = metric("extractos_transcriptions_total", outcome="text")
+    r = client.post("/transcribe", data=recording())
+    assert r.status_code == 200 and r.get_json() == {"text": "la luna sale"}
+    assert calls == [(b"fake opus", "grabacion.webm", "audio/webm")]
+    assert metric("extractos_transcriptions_total", outcome="text") == before + 1
+
+
+def test_transcribe_nothing_said(client, orchardrun):
+    orchardrun[1]["text"] = ""
+    assert client.post("/transcribe", data=recording()).get_json() == {"text": ""}
+
+
+def test_transcribe_service_down(client, orchardrun, capsys):
+    import stt
+    orchardrun[1]["text"] = stt.Unavailable("HTTP 402: billing details")
+    before = metric("extractos_transcriptions_total", outcome="failed")
+    r = client.post("/transcribe", data=recording())
+    assert r.status_code == 502 and "billing" not in r.get_data(as_text=True)    # only in the log
+    assert metric("extractos_transcriptions_total", outcome="failed") == before + 1
+
+
+@pytest.mark.parametrize("data", [{}, recording(mimetype="text/plain"), recording(data=b"")])
+def test_bad_recordings_are_refused(client, orchardrun, data):
+    assert client.post("/transcribe", data=data).status_code == 400
+    assert orchardrun[0] == []
+
+
+def test_long_recordings_are_refused(client, orchardrun):
+    r = client.post("/transcribe", data=recording(data=b"x" * (app_module.MAX_RECORDING_BYTES + 1)))
+    assert r.status_code == 413 and orchardrun[0] == []
+
+
+def test_stt_sends_a_multipart_form(monkeypatch):
+    """The request stt.py builds by hand (no extra library): fields, file, key."""
+    import email.parser
+    import io
+    import stt
+    monkeypatch.setenv("ORCHARDRUN_API_KEY", "test-key")
+    sent = {}
+
+    def urlopen(req, timeout):
+        sent["req"] = req
+        return io.BytesIO(b'{"text": " La luna sale. "}')
+    monkeypatch.setattr(stt.urllib.request, "urlopen", urlopen)
+    assert stt.transcribe(b"OPUS", "grabacion.webm", "audio/webm") == "La luna sale."
+    req = sent["req"]
+    assert req.get_header("Authorization") == "Bearer test-key"
+    msg = email.parser.BytesParser().parsebytes(b"Content-Type: " + req.get_header("Content-type").encode() + b"\r\n\r\n" + req.data)
+    parts = {p.get_param("name", header="content-disposition"): p for p in msg.get_payload()}
+    assert parts["language"].get_payload() == "es"
+    assert parts["file"].get_filename() == "grabacion.webm" and parts["file"].get_payload(decode=True) == b"OPUS"

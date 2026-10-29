@@ -44,6 +44,8 @@ REPORT_REVIEWS = Counter("extractos_report_reviews_total", "Clip reports reviewe
                          ["decision"])
 SHARES = Counter("extractos_shares_total", "Compartir button outcomes reported by the page: shared, cancelled, failed",
                  ["result"])
+TRANSCRIPTIONS = Counter("extractos_transcriptions_total", "Mic button recordings sent to speech to text: text, empty, failed",
+                         ["outcome"])
 CACHE_BYTES = Gauge("extractos_clip_cache_bytes", "Size of the clip cache")
 INDEX_SONGS = Gauge("extractos_index_songs", "Songs in the search index")
 INDEX_WORDS = Gauge("extractos_index_words", "Sung words in the search index")
@@ -59,6 +61,8 @@ for _result in ("cached", "cut", "failed"):
         CLIPS.labels(_result, _kind)
 for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)
+for _outcome in ("text", "empty", "failed"):
+    TRANSCRIPTIONS.labels(_outcome)
 for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
 for _decision in DECISIONS:

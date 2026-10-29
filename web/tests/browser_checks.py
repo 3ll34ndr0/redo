@@ -52,7 +52,8 @@ def base_url():
     port = free_port()
     proc = subprocess.Popen([sys.executable, "-m", "gunicorn", "--bind", f"127.0.0.1:{port}", "--workers", "1",
                              "--threads", "8", "app:app"], cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
-                            env={**os.environ, "REPORTS_RECHECK_S": "0"})     # a revoked report is gone at once
+                            env={**os.environ, "REPORTS_RECHECK_S": "0",     # a revoked report is gone at once
+                                 "ORCHARDRUN_API_KEY": "test-key"})          # mic button shown (/transcribe faked per test)
     url = f"http://127.0.0.1:{port}"
     for _ in range(60):
         try:
@@ -114,6 +115,50 @@ def test_suggestions_complete_a_line(page, base_url):
     suggestion.click()
     page.wait_for_url("**/search?lyric=*")
     assert page.locator(".audio-card").count() >= 1
+
+
+# A microphone and recorder that "record" a few bytes at once: no device or permission prompt needed
+FAKE_RECORDER = """
+// the whole object: Playwright's WebKit may have none (or ignore assigning to it)
+Object.defineProperty(navigator, 'mediaDevices', { value: { getUserMedia: async () => ({ getTracks: () => [{ stop() {} }] }) } });
+window.MediaRecorder = class extends EventTarget {
+    constructor() { super(); this.state = 'inactive'; this.mimeType = 'audio/webm;codecs=opus'; }
+    start() { this.state = 'recording'; }
+    stop() {
+        this.state = 'inactive';
+        const e = new Event('dataavailable'); e.data = new Blob(['fake opus'], { type: this.mimeType });
+        this.dispatchEvent(e); this.dispatchEvent(new Event('stop'));
+    }
+};
+"""
+
+
+def test_mic_searches_what_was_said(page, base_url):
+    sent = []
+
+    def transcribe(route):
+        sent.append(route.request.headers.get("content-type", ""))
+        route.fulfill(json={"text": "sale sobre"})
+    page.add_init_script(FAKE_RECORDER)
+    page.route(base_url + "/transcribe", transcribe)
+    page.goto(base_url + "/")
+    mic = page.locator("#mic")
+    mic.click()
+    expect(mic).to_have_attribute("data-state", "recording")
+    mic.click()
+    page.wait_for_url("**/search?lyric=sale+sobre")
+    assert sent and sent[0].startswith("multipart/form-data")
+    assert page.locator(".audio-card").count() >= 1
+
+
+def test_mic_says_when_nothing_was_heard(page, base_url):
+    page.add_init_script(FAKE_RECORDER)
+    page.route(base_url + "/transcribe", lambda route: route.fulfill(json={"text": ""}))
+    page.goto(base_url + "/")
+    page.locator("#mic").click()
+    page.locator("#mic").click()
+    expect(page.locator("#mic-status")).to_contain_text("No se escuchó nada")
+    expect(page.locator("#mic")).to_have_attribute("data-state", "idle")
 
 
 # --- ¿No coincide?
