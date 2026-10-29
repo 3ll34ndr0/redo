@@ -227,6 +227,28 @@ add(logs_panel("Latest reports",
     10, 9, 14)
 end_row(9)
 
+# ------------------------------------------------------------------ voice search (mic button → Orchardrun)
+
+row("Voice search (mic)")
+add(timeseries("Transcriptions by outcome",
+               [prom('sum by (outcome) (increase(extractos_transcriptions_total[$__rate_interval]))', "{{outcome}}")],
+               bars=True, stacked=True,
+               description="Mic recordings sent to Orchardrun: text = something heard (then searched); empty = nothing "
+                           "understood (often singing or noise); failed = Orchardrun refused or didn't answer (see Errors)",
+               overrides=[color("text", "green"), color("empty", "yellow"), color("failed", "red")]),
+    9, 9, 0)
+add(stat("Paid calls, last 24 h", 'sum(increase(extractos_transcriptions_total[24h]))',
+         description="Every recording is a paid Orchardrun call. The app stops at 500 a day for the whole site "
+                     "(and 60 per visitor); 429s show in Rate-limited requests (route transcribe)",
+         thresholds={"mode": "absolute", "steps": [{"color": "green", "value": None}, {"color": "orange", "value": 400},
+                                                   {"color": "red", "value": 500}]}),
+    4, 9, 9)
+add(logs_panel("Latest transcriptions",
+               LOGS + ' | json | event="transcribe" | line_format "{{.outcome}} · {{.text}}{{.error}} · {{.duration_ms}} ms"',
+               description="What Orchardrun heard (the text then goes to the search box). Failed ones show the upstream error"),
+    11, 9, 13)
+end_row(9)
+
 dashboard = {
     "__inputs": [
         {"name": "DS_PROMETHEUS", "label": "Prometheus", "description": "Metrics (grafanacloud-*-prom)",
