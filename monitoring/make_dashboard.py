@@ -97,13 +97,20 @@ def logs_panel(title, expr, description=""):
                         "enableLogDetails": True, "dedupStrategy": "none", "prettifyLogMessage": False}}
 
 
+TOP = 15        # rows in each "Top ..." table
+
+
 def top_table(title, expr, label, column, description=""):
-    """Instant LogQL metric query (sum by <label>) shown as a two-column table."""
+    """Instant LogQL metric query (sum by <label>) shown as a two-column table: <column>, Times.
+    One series per <label> value: its label becomes a column, then all are merged into one table
+    (a "reduce" to rows showed a single row in Grafana 12: the series reach it already joined)."""
     return {"type": "table", "title": title, "description": description, "datasource": LOKI,
-            "targets": [loki(expr, instant=True, legend="{{" + label + "}}")],
+            "targets": [loki(expr, instant=True)],
             "transformations": [
-                {"id": "reduce", "options": {"reducers": ["lastNotNull"], "mode": "seriesToRows"}},
-                {"id": "organize", "options": {"renameByName": {"Field": column, "Last *": "Times", "Last": "Times"}}},
+                {"id": "labelsToFields", "options": {}},
+                {"id": "merge", "options": {}},
+                {"id": "organize", "options": {"excludeByName": {"Time": True},
+                                               "renameByName": {label: column, "Value": "Times", "Value #A": "Times"}}},
                 {"id": "sortBy", "options": {"sort": [{"field": "Times", "desc": True}]}},
             ],
             "options": {"showHeader": True, "cellHeight": "sm"},
@@ -193,12 +200,12 @@ end_row(6)
 
 row("What people search (logs)")
 add(top_table('Top "nothing found" searches',
-              f'topk(20, sum by (query) (count_over_time({SEARCHES} | outcome="none" [$__range])))', "query", "Search",
+              f'topk({TOP}, sum by (query) (count_over_time({SEARCHES} | outcome="none" [$__range])))', "query", "Search",
               description="Searches with no result at all: missing songs, misaligned lyrics, or typos the search can't fix"),
     8, 10, 0)
-add(top_table("Top searched phrases", f'topk(20, sum by (query) (count_over_time({SEARCHES} [$__range])))', "query", "Search"), 8, 10, 8)
+add(top_table("Top searched phrases", f'topk({TOP}, sum by (query) (count_over_time({SEARCHES} [$__range])))', "query", "Search"), 8, 10, 8)
 add(top_table("Top songs (first result)",
-              f'topk(20, sum by (top_song) (count_over_time({SEARCHES} | top_song!="" [$__range])))', "top_song", "Song",
+              f'topk({TOP}, sum by (top_song) (count_over_time({SEARCHES} | top_song!="" [$__range])))', "top_song", "Song",
               description="Song of the first card of each search"),
     8, 10, 16)
 end_row(10)
@@ -218,7 +225,7 @@ add(timeseries("Reports by problem", [prom('sum by (problem) (increase(extractos
                           color("ends_late", "blue"), color("wrong_phrase", "red"), color("unsure", "text")]),
     8, 9, 0)
 add(top_table("Most reported songs",
-              f'topk(20, sum by (song) (count_over_time({LOGS} | json | event="clip_report" [$__range])))', "song", "Song"),
+              f'topk({TOP}, sum by (song) (count_over_time({LOGS} | json | event="clip_report" [$__range])))', "song", "Song"),
     6, 9, 8)
 add(logs_panel("Latest reports",
                LOGS + ' | json | event="clip_report" | line_format "{{.song}} · {{.problem}} · clip {{.start_ms}}-{{.end_ms}} ms · '
