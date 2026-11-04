@@ -11,7 +11,7 @@ resources:
   - noindex.yaml
 images:
   - name: ghcr.io/3ll34ndr0/redo
-    newTag: d24e143697b24f2dedcd5a68a283cb071ffcaab2
+    newTag: 7b6e7a5b30b22f389d70f6a064c465bddf1a60de
 patches:
   - path: ingress.yaml
   - target: {kind: Ingress, name: extractos-old-name}
