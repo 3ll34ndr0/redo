@@ -69,7 +69,7 @@
                     class="w-full min-w-0 px-6 py-4 rounded-xl focus:outline-none text-lg text-gray-700">
                 {% if voice_search %}
                 {# shown by the script below where the browser can record (HTTPS or localhost) #}
-                <button type="button" id="mic" hidden data-state="idle" aria-label="Decir la frase"
+                <button type="button" id="mic" hidden data-state="idle" aria-label="Decir la frase" title="Cantá o decí al menos 6 palabras"
                     class="mic shrink-0 mr-2 px-4 py-4 rounded-xl font-bold border-2 border-[#74ACDF] text-[#74ACDF]">🎤</button>
                 {% endif %}
                 <button type="submit" 
@@ -485,7 +485,7 @@
             });
             recorder.start();
             close();
-            setMic('recording', 'Decí la frase y tocá ■ al terminar.');
+            setMic('recording', 'Cantá o decí al menos 6 palabras de la frase y tocá ■ al terminar.');   // shorter phrases are often misheard (lyrics/eval/asr_bench.py)
             stopTimer = setTimeout(() => recorder.state === 'recording' && recorder.stop(), MIC_MAX_MS);
         }
 
