@@ -1,7 +1,10 @@
 """The Flask app (web/app.py) on made-up data: pages, validation, clips, metrics."""
 
+import io
 import json
 import re
+import time
+import urllib.error
 
 import pytest
 from prometheus_client import REGISTRY
@@ -363,13 +366,71 @@ def test_every_module_goes_into_the_image():
     import glob
     import os
     root = os.path.join(os.path.dirname(__file__), "..", "..")
-    modules = {os.path.relpath(p, os.path.join(root, "web")) for pattern in ("*.py", "static/*.js")
+    modules = {os.path.relpath(p, os.path.join(root, "web")) for pattern in ("*.py", "*.txt", "static/*.js")
                for p in glob.glob(os.path.join(root, "web", pattern))}
     dockerfile = open(os.path.join(root, "Dockerfile")).read()
     dockerignore = open(os.path.join(root, ".dockerignore")).read().split()
     for name in modules:
         assert f"web/{name}" in dockerfile, f"{name} isn't copied by the Dockerfile"
         assert f"!web/{name}" in dockerignore, f"{name} isn't let through by .dockerignore"
+
+
+def footer_text(page):
+    return re.search(r"<footer[^>]*>\s*(.*?)\s*</footer>", page, re.S).group(1)
+
+
+def test_footer_shows_a_curated_phrase(client):
+    phrases = app_module.footer_phrases.phrases
+    assert "Lo poco agrada, lo mucho enfada" in phrases and not any(p.startswith("#") for p in phrases)
+    shown = {footer_text(client.get("/").get_data(as_text=True)) for _ in range(40)}
+    assert shown <= set(phrases) and len(shown) > 1          # random: 40 loads show both of two
+
+
+class FakeGitHub:
+    """urlopen stand-in for the list's raw file: answers `body` (bytes) or raises it."""
+    def __init__(self, body):
+        self.body, self.urls = body, []
+
+    def __call__(self, req, timeout):
+        self.urls.append(req.full_url)
+        if isinstance(self.body, Exception):
+            raise self.body
+        return io.BytesIO(self.body)
+
+
+def test_footer_list_comes_from_the_url(client, monkeypatch):
+    import footer
+    github = FakeGitHub("# curated\n\nUna frase nueva\n<b>Otra</b> frase\n".encode())
+    monkeypatch.setattr(footer.urllib.request, "urlopen", github)
+    phrases = footer.Phrases(url="https://example.test/phrases.txt", refresh_s=300)
+    monkeypatch.setattr(app_module, "footer_phrases", phrases)
+    client.get("/")                                     # the first page starts the fetch in the background
+    for _ in range(100):
+        if phrases.phrases[0] == "Una frase nueva":
+            break
+        time.sleep(0.01)
+    assert phrases.phrases == ["Una frase nueva", "<b>Otra</b> frase"]
+    shown = {footer_text(client.get("/").get_data(as_text=True)) for _ in range(40)}
+    assert shown == {"Una frase nueva", "&lt;b&gt;Otra&lt;/b&gt; frase"}     # escaped: the list is text, not HTML
+    assert github.urls == ["https://example.test/phrases.txt"]               # refreshed at most every 300 s
+
+
+def test_footer_keeps_the_last_good_list(monkeypatch):
+    import footer
+    phrases = footer.Phrases(url="https://example.test/phrases.txt")
+    before = list(phrases.phrases)
+    for body in (urllib.error.URLError("down"), b"# only comments\n\n", b"\xff\xfe not utf-8"):
+        monkeypatch.setattr(footer.urllib.request, "urlopen", FakeGitHub(body))
+        phrases.fetch()
+        assert phrases.phrases == before
+
+
+def test_footer_without_a_url_never_fetches(monkeypatch):
+    import footer
+    github = FakeGitHub(b"Nada")
+    monkeypatch.setattr(footer.urllib.request, "urlopen", github)
+    footer.Phrases(url="").pick()
+    assert github.urls == []
 
 
 def test_scripts_have_their_version_in_the_url(client):

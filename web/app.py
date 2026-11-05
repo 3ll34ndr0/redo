@@ -15,6 +15,7 @@ import urllib.parse
 import observability as obs
 import access
 import fixes
+import footer
 import stt
 from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
@@ -50,6 +51,8 @@ MAX_FFMPEG = 2                        # clips cut at the same time; more request
 SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
 # The mic button (stt.py): a few seconds of speech, Opus/AAC at the browser's bitrate, is ~100 kB.
 MAX_RECORDING_BYTES = 1024 * 1024
+
+footer_phrases = footer.Phrases()
 
 
 def client_ip():
@@ -189,7 +192,8 @@ def static_url(filename):
 
 @app.context_processor
 def site_url():
-    return {'site_url': SITE_URL or request.url_root.rstrip("/"), 'voice_search': stt.enabled()}
+    return {'site_url': SITE_URL or request.url_root.rstrip("/"), 'voice_search': stt.enabled(),
+            'footer_phrase': footer_phrases.pick()}
 
 
 @app.route('/')
