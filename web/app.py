@@ -11,11 +11,11 @@ import os
 import functools
 import hashlib
 import urllib.parse
-import random
 
 import observability as obs
 import access
 import fixes
+import footer
 import stt
 from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
@@ -52,14 +52,7 @@ SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
 # The mic button (stt.py): a few seconds of speech, Opus/AAC at the browser's bitrate, is ~100 kB.
 MAX_RECORDING_BYTES = 1024 * 1024
 
-
-def load_footer_phrases(path=os.path.join(os.path.dirname(os.path.abspath(__file__)), "footer_phrases.txt")):
-    """The curated footer sentences: one per line, # comments and blank lines skipped."""
-    with open(path, encoding="utf-8") as f:
-        return [line.strip() for line in f if line.strip() and not line.lstrip().startswith("#")]
-
-
-FOOTER_PHRASES = load_footer_phrases()
+footer_phrases = footer.Phrases()
 
 
 def client_ip():
@@ -200,7 +193,7 @@ def static_url(filename):
 @app.context_processor
 def site_url():
     return {'site_url': SITE_URL or request.url_root.rstrip("/"), 'voice_search': stt.enabled(),
-            'footer_phrase': random.choice(FOOTER_PHRASES)}
+            'footer_phrase': footer_phrases.pick()}
 
 
 @app.route('/')

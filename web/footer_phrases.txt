@@ -1,3 +1,4 @@
-# The footer shows one of these at random on every page load (one per line; # starts a comment).
+# The footer's starting list (web/footer.py). The site reads the live one from FOOTER_PHRASES_URL:
+# the yo repo's unaudio/footer_phrases.txt; edit that one, this is only the fallback.
 Lo esencial es invisible a los ojos
 Lo poco agrada, lo mucho enfada
