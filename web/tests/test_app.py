@@ -363,13 +363,21 @@ def test_every_module_goes_into_the_image():
     import glob
     import os
     root = os.path.join(os.path.dirname(__file__), "..", "..")
-    modules = {os.path.relpath(p, os.path.join(root, "web")) for pattern in ("*.py", "static/*.js")
+    modules = {os.path.relpath(p, os.path.join(root, "web")) for pattern in ("*.py", "*.txt", "static/*.js")
                for p in glob.glob(os.path.join(root, "web", pattern))}
     dockerfile = open(os.path.join(root, "Dockerfile")).read()
     dockerignore = open(os.path.join(root, ".dockerignore")).read().split()
     for name in modules:
         assert f"web/{name}" in dockerfile, f"{name} isn't copied by the Dockerfile"
         assert f"!web/{name}" in dockerignore, f"{name} isn't let through by .dockerignore"
+
+
+def test_footer_shows_a_curated_phrase(client):
+    phrases = app_module.load_footer_phrases()
+    assert "Lo poco agrada, lo mucho enfada" in phrases and not any(p.startswith("#") for p in phrases)
+    footer = lambda page: re.search(r"<footer[^>]*>\s*(.*?)\s*</footer>", page, re.S).group(1)
+    shown = {footer(client.get("/").get_data(as_text=True)) for _ in range(40)}
+    assert shown <= set(phrases) and len(shown) > 1          # random: 40 loads show both of two
 
 
 def test_scripts_have_their_version_in_the_url(client):
