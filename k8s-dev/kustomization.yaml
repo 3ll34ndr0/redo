@@ -1,7 +1,7 @@
 # Staging: the development branch at https://unaudio-dev.marso.ar (namespace unaudio-dev,
 # Argo CD app "unaudio-dev", argocd-application-dev.yaml). Production's manifests (../k8s) with:
 # its own namespace and reports volume, its own image (tag below, rewritten by
-# .github/workflows/deploy.yml on every push to development), no old-name redirect, and
+# .github/workflows/deploy.yml on every push to development), no old-name or unaudio.ar redirect, and
 # a noindex header. Songs and database: production's /srv/extractos, read-only.
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
@@ -11,7 +11,7 @@ resources:
   - noindex.yaml
 images:
   - name: ghcr.io/3ll34ndr0/redo
-    newTag: 7b6e7a5b30b22f389d70f6a064c465bddf1a60de
+    newTag: eb2a0a9ef408051279b0f6c7ef5c3e3bf9c7500f
 patches:
   - path: ingress.yaml
   - target: {kind: Ingress, name: extractos-old-name}
@@ -26,6 +26,18 @@ patches:
       apiVersion: traefik.io/v1alpha1
       kind: Middleware
       metadata: {name: to-unaudio}
+  - target: {kind: Ingress, name: unaudio-ar}
+    patch: |
+      $patch: delete
+      apiVersion: networking.k8s.io/v1
+      kind: Ingress
+      metadata: {name: unaudio-ar}
+  - target: {kind: Middleware, name: unaudio-ar-to-unaudio}
+    patch: |
+      $patch: delete
+      apiVersion: traefik.io/v1alpha1
+      kind: Middleware
+      metadata: {name: unaudio-ar-to-unaudio}
   - patch: |                    # its traces apart from production's
       apiVersion: apps/v1
       kind: Deployment
