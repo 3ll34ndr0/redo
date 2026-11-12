@@ -8,7 +8,7 @@ Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
-adjustment, sending a report, reset), ✂ Recortar and Descargar la voz, other occurrences, the play button, phone width,
+adjustment, sending a report, reset), ✂ Recortar, Descargar la voz and Voz y banda | Solo voz, other occurrences, the play button, phone width,
 JavaScript errors.
 """
 
@@ -368,6 +368,34 @@ def test_no_voice_download_without_a_stem(page, base_url):
     assert card.locator(".download-voice").count() == 0
     card.get_by_role("button", name="✂ Recortar").click()
     expect(card.locator(".trim-panel .wave-source")).to_have_text("la canción (no hay voz separada)")
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_play_button_plays_voice_only_or_with_the_band(page, base_url):
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    card = page.locator(".audio-card").first
+    audio, play = card.locator("audio"), card.locator(".play-btn")
+    band, voice = card.get_by_role("button", name="Voz y banda"), card.get_by_role("button", name="Solo voz")
+    expect(band).to_have_attribute("aria-pressed", "true")
+    voice.click()
+    expect(voice).to_have_attribute("aria-pressed", "true")
+    assert audio.get_attribute("src") == "/voice/cancion_de_prueba/9300-10100.mp3"
+    play.click()
+    expect(play).to_have_attribute("data-state", re.compile("playing|idle"))
+    expect(play).to_have_attribute("data-state", "idle", timeout=5000)       # 0.8 s, played to the end
+    assert page.evaluate("() => document.querySelector('.audio-card audio').error") is None
+    # a trim plays from the voice too, and "Voz y banda" goes back to the song
+    card.get_by_role("button", name="✂ Recortar").click()
+    card.locator(".trim-panel .wave-handle[data-edge=start]").press("Shift+ArrowLeft")
+    card.get_by_text("▶ Escuchar el recorte").click()
+    assert audio.get_attribute("src") == "/voice/cancion_de_prueba/8300-10100.mp3"
+    band.click()
+    assert audio.get_attribute("src") == "/clip/cancion_de_prueba/8300-10100.mp3"
+
+
+def test_no_voice_switch_without_a_stem(page, base_url):
+    page.goto(base_url + "/search?lyric=tren+llega+tarde")
+    assert page.locator(".audio-card .listen").count() == 0
 
 
 # --- play button

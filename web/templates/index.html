@@ -41,6 +41,8 @@
            every browser and collapsed to 0 px in Chrome at desktop width */
         .play-btn { position: relative; overflow: hidden; }
         .play-btn[data-state="loading"] { cursor: progress; }
+        /* Voz y banda | Solo voz: what the play button plays (songs with a vocal stem) */
+        .listen button[aria-pressed="true"] { background: #74ACDF; color: white; }
         .play-progress { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px; background: #F6B40E;
                          transform: scaleX(0); transform-origin: left; }
         .stanzas .stanza[data-where="far"] { display: none; }
@@ -103,7 +105,14 @@
                                 class="play-btn btn-celeste w-full text-white font-bold px-5 py-3 rounded-xl shadow-md">
                                 <span class="play-label">▶ Escuchar</span><span class="play-progress" aria-hidden="true"></span>
                             </button>
-                            <audio preload="none" src="{{ item.clip }}"></audio>
+                            {% if item.voice %}
+                            <div class="listen mt-2 grid grid-cols-2 rounded-lg border-2 border-[#74ACDF] overflow-hidden text-xs font-bold text-[#74ACDF]"
+                                role="group" aria-label="Qué escuchar">
+                                <button type="button" data-listen="band" aria-pressed="true" class="py-1">Voz y banda</button>
+                                <button type="button" data-listen="voice" aria-pressed="false" class="py-1">Solo voz</button>
+                            </div>
+                            {% endif %}
+                            <audio preload="none" src="{{ item.clip }}" data-clip="{{ item.clip }}"></audio>
                         </div>
                     </div>
                     <p class="lyric text-gray-700 text-lg italic">
@@ -272,9 +281,15 @@
     // audio's own events, so it also shows plays started elsewhere (other occurrences, ¿No coincide?).
     const PLAY_LABELS = { idle: '▶ Escuchar', loading: 'Cargando…', playing: '❚❚ Pausa', error: '↻ Reintentar' };
 
+    // The player keeps the clip it plays in data-clip (a /clip/ URL); with "Solo voz" chosen it
+    // plays the same times from the vocal stem (/voice/….mp3).
+    const listening = (card, url) => card.dataset.listen === 'voice' ? url.replace('/clip/', '/voice/') : url;
+
     function playIn(card, url) {
         const audio = card.querySelector('audio');
-        if (url) audio.src = url;
+        if (url) audio.dataset.clip = url;
+        const src = listening(card, audio.dataset.clip);
+        if (audio.getAttribute('src') !== src) audio.src = src;
         else if (audio.error) audio.load();          // a failed source isn't fetched again by play()
         document.querySelectorAll('.audio-card audio').forEach(a => { if (a !== audio) a.pause(); });
         // AbortError = a new src replaced this one before it started: not a failure
@@ -307,6 +322,18 @@
         audio.addEventListener('emptied', () => { setPlayState(card, 'idle'); progress(); });
         audio.addEventListener('error', () => setPlayState(card, 'error'));
     });
+
+    // Voz y banda | Solo voz: switching while it plays starts the other version; otherwise the
+    // next play uses it
+    document.querySelectorAll('.listen button').forEach(btn => btn.addEventListener('click', () => {
+        const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
+        if (card.dataset.listen === btn.dataset.listen || (!card.dataset.listen && btn.dataset.listen === 'band')) return;
+        card.dataset.listen = btn.dataset.listen;
+        card.querySelectorAll('.listen button').forEach(b => b.setAttribute('aria-pressed', b === btn));
+        const playing = !audio.paused;
+        if (playing) playIn(card);
+        else audio.src = listening(card, audio.dataset.clip);
+    }));
 
     // Other occurrences: play that rendition in the card's player (and share/download it)
     document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {
