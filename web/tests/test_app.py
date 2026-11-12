@@ -33,7 +33,7 @@ def test_search_page_highlights_the_line(client):
     assert "La luna <mark>sale</mark> <mark>sobre</mark> el puerto" in page
     assert "Cancion De Prueba" in page
     assert "/clip/cancion_de_prueba/" in page
-    assert 'download="Cancion De Prueba - sale sobre.mp3"' in page
+    assert 'download="Cancion De Prueba - sale sobre (voz).mp3"' in page      # Solo voz: the default with a stem
 
 
 def test_stanzas_shown_only_when_turned_on(client, monkeypatch):
@@ -160,10 +160,14 @@ def test_voice_clip_download(client):
     assert r.data != client.get("/clip/cancion_de_prueba/5000-7000.mp3").data
 
 
-def test_voice_download_only_where_there_is_a_stem(client):
+def test_voice_is_the_default_where_there_is_a_stem(client):
+    """Solo voz | Voz y banda starts on the voice: the player and Descargar give /voice/….mp3."""
     with_stem = client.get("/search?lyric=sale+sobre").get_data(as_text=True)
-    assert 'class="download-voice' in with_stem and "/voice/cancion_de_prueba/9300-10100.mp3?name=" in with_stem
-    assert 'class="download-voice' not in client.get("/search?lyric=tren+llega+tarde").get_data(as_text=True)
+    assert 'data-listen="voice"' in with_stem and 'class="listen' in with_stem
+    assert 'src="/voice/cancion_de_prueba/9300-10100.mp3"' in with_stem
+    assert re.search(r'href="/voice/cancion_de_prueba/9300-10100\.mp3\?name=[^"]*%28voz%29\.mp3"', with_stem)
+    without = client.get("/search?lyric=tren+llega+tarde").get_data(as_text=True).split("<footer")[0]   # the cards, not the script
+    assert 'data-listen="band"' in without and 'class="listen' not in without and "/voice/" not in without
 
 
 def test_share_events(client):
