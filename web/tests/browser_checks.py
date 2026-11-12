@@ -8,7 +8,7 @@ Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
-adjustment, sending a report, reset), other occurrences, the play button, phone width,
+adjustment, sending a report, reset), ✂ Recortar and Descargar la voz, other occurrences, the play button, phone width,
 JavaScript errors.
 """
 
@@ -314,6 +314,61 @@ def test_voice_preview_plays_the_selection(page, base_url):
 def test_song_without_vocal_stem_shows_the_song(page, base_url):
     card = open_editor(page, base_url, "tren+llega+tarde")
     assert card.locator(".wave-source").inner_text() == "la canción (no hay voz separada)"
+
+# --- ✂ Recortar (the visitor's own edges, nothing sent) and Descargar la voz
+
+def voice_href(card):
+    return card.locator(".download-voice").get_attribute("href").split("?")[0]
+
+
+def test_trimming_moves_both_downloads_and_sends_nothing(page, base_url):
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    card = page.locator(".audio-card").first
+    assert voice_href(card).endswith("/voice/cancion_de_prueba/9300-10100.mp3")
+    before = len(stored_reports())
+    card.get_by_role("button", name="✂ Recortar").click()
+    panel = card.locator(".trim-panel")
+    panel.locator(".wave-handle[data-edge=start]").press("Shift+ArrowLeft")
+    panel.locator(".wave-handle[data-edge=end]").press("ArrowRight")
+    assert (panel.locator(".report-start").inner_text(), panel.locator(".report-end").inner_text()) == ("0:08.3", "0:10.2")
+    assert download_href(card).endswith("/clip/cancion_de_prueba/8300-10200.mp3")
+    assert voice_href(card).endswith("/voice/cancion_de_prueba/8300-10200.mp3")
+    panel.get_by_text("▶ Escuchar el recorte").click()
+    assert card.locator("audio").get_attribute("src").endswith("/8300-10200.mp3")
+    if HAS_FFMPEG:
+        with page.expect_download() as d:
+            card.locator(".download-voice").click()
+        assert d.value.suggested_filename.endswith("(voz).mp3")
+        assert 1.8 <= mp3_seconds(d.value.path()) <= 2.0             # the 1.9 s trim
+    # closed and opened again: the trim is still there; "Volver al original" undoes it
+    card.get_by_role("button", name="✂ Recortar").click()
+    assert panel.is_hidden() and download_href(card).endswith("/8300-10200.mp3")
+    card.get_by_role("button", name="✂ Recortar").click()
+    assert panel.locator(".report-start").inner_text() == "0:08.3"
+    panel.get_by_text("Volver al original").click()
+    assert download_href(card).endswith("/9300-10100.mp3") and voice_href(card).endswith("/9300-10100.mp3")
+    assert len(stored_reports()) == before                             # no report
+
+
+def test_trim_and_report_panels_take_turns(page, base_url):
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    card = page.locator(".audio-card").first
+    card.get_by_role("button", name="✂ Recortar").click()
+    card.locator(".trim-panel .wave-handle[data-edge=start]").press("Shift+ArrowLeft")
+    card.get_by_text("¿No coincide?").click()                         # the report is about the clip as served
+    assert card.locator(".trim-panel").is_hidden()
+    assert download_href(card).endswith("/9300-10100.mp3")
+    card.get_by_role("button", name="✂ Recortar").click()
+    assert card.locator(".report-panel").is_hidden()
+
+
+def test_no_voice_download_without_a_stem(page, base_url):
+    page.goto(base_url + "/search?lyric=tren+llega+tarde")
+    card = page.locator(".audio-card").first
+    assert card.locator(".download-voice").count() == 0
+    card.get_by_role("button", name="✂ Recortar").click()
+    expect(card.locator(".trim-panel .wave-source")).to_have_text("la canción (no hay voz separada)")
+
 
 # --- play button
 

@@ -90,7 +90,8 @@
                 {% set kinds = {'exact': 'Exacto', 'partial': 'Completado', 'approx': 'Parecido'} %}
                 {% for item in results %}
                 <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
-                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}">
+                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}"
+                    {%- if item.voice %} data-voice-filename="{{ item.filename[:-4] }} (voz).mp3"{% endif %}>
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="flex-1 min-w-0">
                             <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
@@ -135,8 +136,25 @@
                             class="share btn-celeste text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md">Compartir</button>
                         <a download="{{ item.filename }}" href="{{ item.clip }}?name={{ item.filename | urlencode }}"
                             class="download text-sm font-bold px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar</a>
+                        {% if item.voice %}
+                        {# the same clip from the vocal stem (/voice/….mp3); follows the card's clip like Descargar #}
+                        <a download="{{ item.filename[:-4] }} (voz).mp3" href="{{ item.clip | replace('/clip/', '/voice/', 1) }}?name={{ (item.filename[:-4] ~ ' (voz).mp3') | urlencode }}"
+                            class="download-voice text-sm font-bold px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar la voz</a>
+                        {% endif %}
+                        <button type="button" class="trim-toggle text-sm font-bold px-4 py-2 rounded-xl border-2 border-gray-300 text-gray-600 hover:border-gray-500"
+                            aria-expanded="false">✂ Recortar</button>
                         <span class="share-status text-xs text-gray-400" aria-live="polite"></span>
                     </div>
+                    {# ✂ Recortar: the visitor's own edges, for their download/share only (nothing is sent).
+                       Built from the template on first open, so a closed card has one timing editor. #}
+                    <template class="trim-template">
+                        <div class="trim-panel p-4 rounded-xl bg-gray-50 text-sm text-gray-700 space-y-2">
+                            <p class="font-bold">Recortalo a tu gusto</p>
+                            <p class="text-xs text-gray-500">Arrastrá los bordes (o tocá la onda). Descargar y Compartir te dan este pedazo. Es solo para vos: no se envía nada. Se ve <span class="wave-source">solo la voz</span>.</p>
+                            {% call wave.editor() %}<button type="button" class="trim-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el recorte</button>
+                            <button type="button" class="trim-reset px-3 py-1 rounded-lg text-gray-500 underline">Volver al original</button>{% endcall %}
+                        </div>
+                    </template>
                     {% if item.others %}
                     <div class="text-sm text-gray-500 flex flex-wrap items-center gap-2">
                         <span>Todas las veces:</span>
@@ -220,6 +238,8 @@
     function selectClip(card, url, prefetch = true) {
         card.dataset.clip = url;
         card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
+        const voice = card.querySelector('.download-voice');     // the same times, from the vocal stem
+        if (voice) voice.href = url.replace('/clip/', '/voice/') + '?name=' + encodeURIComponent(card.dataset.voiceFilename);
         if (prefetch && canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
     }
 
@@ -338,6 +358,7 @@
 
         toggle.addEventListener('click', () => {
             const open = panel.hidden;
+            if (open) closeTrim(card);                       // the report is about the clip as served
             panel.hidden = !open;
             toggle.setAttribute('aria-expanded', open);
             if (open) reset();                               // after showing it: the canvas needs its size
@@ -379,6 +400,61 @@
                 status.textContent = 'No se pudo enviar.';
             }
         });
+    });
+
+    // ✂ Recortar: the visitor moves the edges for their own copy (Descargar, Descargar la voz,
+    // Compartir, ▶ Escuchar the trim). No report: nothing leaves the page. Opens on the card's
+    // current clip, so a trim survives closing and reopening; "Volver al original" undoes it.
+    function closeTrim(card) {
+        const toggle = card.querySelector('.trim-toggle'), panel = card.querySelector('.trim-panel');
+        if (!panel || panel.hidden) return;
+        panel.hidden = true;
+        toggle.setAttribute('aria-expanded', 'false');
+        WaveEditor.stopVoice();
+    }
+
+    document.querySelectorAll('.audio-card').forEach(card => {
+        const toggle = card.querySelector('.trim-toggle');
+        if (!toggle) return;
+        const parse = url => { const m = url.match(CLIP_URL); return { song: decodeURIComponent(m[1]), start: +m[2], end: +m[3] }; };
+        let panel, editor, song;
+        const trimmedUrl = () => `/clip/${encodeURIComponent(song)}/${editor.fixed.start}-${editor.fixed.end}.mp3`;
+
+        function load() {
+            const served = parse(card.dataset.served), now = parse(card.dataset.clip);
+            song = served.song;
+            editor.load(song, served, now.song === song ? now : served);
+        }
+
+        function build() {
+            const template = card.querySelector('.trim-template');
+            panel = template.content.firstElementChild.cloneNode(true);
+            template.after(panel);
+            editor = new WaveEditor(panel, {
+                onChange: () => selectClip(card, trimmedUrl(), false),
+                onVoicePlay: () => document.querySelectorAll('.audio-card audio').forEach(a => a.pause()),
+            });
+            panel.querySelector('.trim-play').addEventListener('click', () => {
+                WaveEditor.stopVoice();
+                selectClip(card, trimmedUrl());                 // and Compartir sends the trim
+                playIn(card, card.dataset.clip);
+            });
+            panel.querySelector('.trim-reset').addEventListener('click', () => {
+                selectClip(card, card.dataset.served);
+                load();
+            });
+        }
+
+        toggle.addEventListener('click', () => {
+            if (panel && !panel.hidden) return closeTrim(card);
+            const report = card.querySelector('.report-panel');
+            if (report && !report.hidden) card.querySelector('.report-toggle').click();
+            if (!panel) build();
+            panel.hidden = false;
+            toggle.setAttribute('aria-expanded', 'true');
+            load();                                          // after showing it: the canvas needs its size
+        });
+        card.addEventListener('clipchange', () => { if (panel && !panel.hidden) load(); });
     });
 
     // Suggestions while typing: lyric lines that complete the phrase

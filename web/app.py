@@ -236,6 +236,7 @@ def search():
             'filename': file_name(hit.song, tokens),
             'time': clock(hit.start),
             'clip': clip_url(hit.song, hit.start, hit.end),
+            'voice': has_vocals(hit.song),     # Descargar la voz: only where there's a vocal stem
             'others': [{'time': clock(o.start), 'clip': clip_url(o.song, o.start, o.end)} for o in hit.others],
         })
     exact = any(r['kind'] != 'approx' for r in results)     # 'partial' = what was typed, completed
@@ -344,22 +345,20 @@ def cut(ffmpeg_args, output_path, song, start_ms, end_ms):
     return ('cut' if error is None else 'failed'), round(seconds * 1000)
 
 
-@app.route('/clip/<song>/<int:start_ms>-<int:end_ms>.mp3')
-@limiter.limit("60/minute;600/hour")
-@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
-def clip(song, start_ms, end_ms):
-    """The sung phrase from start to end (ms), exactly (no padding: visitors' timing fixes make the
-    edges right), cut on first request and cached.
+def has_vocals(song):
+    return os.path.exists(os.path.join(VOCALS_DIR, f"{song}.mp3"))
 
-    ?name=<file name> sends it as a download with that name (Descargar button).
-    """
-    kind = 'download' if request.args.get('name') else 'play'
-    if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
+
+def send_mp3_cut(song, start_ms, end_ms, input_path, prefix, kind):
+    """start..end (ms) of input_path, exactly (no padding), cut on first request and cached under
+    prefix + song + times. ?name=<file name> sends it as a download with that name."""
+    if not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
         abort(404)
+    name = os.path.basename(request.args.get('name', ''))
+    kind = kind + ('download' if name else 'play')
     start, end = start_ms / 1000, end_ms / 1000
     # File name includes the exact timing (ms), so a rebuilt index never serves stale clips
-    output_path = os.path.join(SNIPPET_DIR, f"{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
-    input_path = os.path.join(MUSIC_DIR, f"{song}.mp3")
+    output_path = os.path.join(SNIPPET_DIR, f"{prefix}{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
     result, ffmpeg_ms = 'cached', None
     if not os.path.exists(output_path):
         if not os.path.exists(input_path):
@@ -372,10 +371,31 @@ def clip(song, start_ms, end_ms):
     if not os.path.exists(output_path):
         abort(500)
     # The URL holds the exact timing, so a clip never changes: browsers and Cloudflare may keep it
-    name = os.path.basename(request.args.get('name', ''))
     if name:
         return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
     return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
+
+
+@app.route('/clip/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def clip(song, start_ms, end_ms):
+    """The sung phrase from start to end (ms), exactly (no padding: visitors' timing fixes make the
+    edges right). ?name=<file name>: a download (Descargar button)."""
+    if song not in get_index().songs:
+        abort(404)
+    return send_mp3_cut(song, start_ms, end_ms, os.path.join(MUSIC_DIR, f"{song}.mp3"), '', '')
+
+
+@app.route('/voice/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def voice_clip(song, start_ms, end_ms):
+    """The same clip from the vocal stem only (Descargar la voz); 404 for a song without one,
+    never the song instead. ?name=<file name>: a download."""
+    if song not in get_index().songs or not has_vocals(song):
+        abort(404)
+    return send_mp3_cut(song, start_ms, end_ms, os.path.join(VOCALS_DIR, f"{song}.mp3"), 'vocals_', 'voice_')
 
 
 @app.route('/voice/<song>/<int:start_ms>-<int:end_ms>.wav')
