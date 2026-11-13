@@ -186,7 +186,7 @@
             }));
 
             window.addEventListener('resize', () => this.draw());
-            if (this.voiceBtn) this.voiceBtn.addEventListener('click', () => this.playVoice());   // optional (_wave.html)
+            this.voiceBtn.addEventListener('click', () => this.playVoice());
         }
 
         // The selection, from the voice: Web Audio plays exactly start..end of the decoded window
@@ -194,7 +194,6 @@
         // never do, and the button must still come back. The playhead and the stop follow the clock.
         playVoice() {
             const { voiceBtn, playhead } = this;
-            if (!voiceBtn) return;
             if (voiceBtn.dataset.playing) return stopVoice();
             if (!this.voice) return;
             stopVoice();

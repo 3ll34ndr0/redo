@@ -1,5 +1,5 @@
 {# The timing editor's markup (static/wave.js): the waveform with two edges, their times, and the
-   voice preview button (voice_button=False: none, the page plays the selection itself). Called with {% call %}: the body = more buttons next to it (the page's own "Escuchar el ajuste"). #}
+   voice preview button. Called with {% call %}: the body = more buttons next to it (the page's own "Escuchar el ajuste"). #}
 {% macro styles() %}
         /* Timing editor: the edges of the selection over the voice's waveform */
         /* the handle reaches 16px below the waveform: the line crosses it, the knob hangs underneath (hides nothing) */
@@ -10,7 +10,7 @@
         .wave[data-state="loading"] .wave-canvas { opacity: .4; }
 {% endmacro %}
 
-{% macro editor(voice_button=True) %}
+{% macro editor() %}
 <div class="wave relative h-24 mb-5 rounded-lg bg-white border border-gray-200 select-none touch-none" data-state="idle">
     <canvas class="wave-canvas absolute inset-0 w-full h-full"></canvas>
     <div class="wave-playhead absolute top-0 bottom-0 w-px bg-gray-800 pointer-events-none" hidden></div>
@@ -25,7 +25,7 @@
     <span>Fin <span class="report-end"></span></span>
 </div>
 <div class="flex flex-wrap gap-2">
-    {% if voice_button %}<button type="button" class="voice-play px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-600 font-bold">▶ Escuchar la voz</button>{% endif %}
+    <button type="button" class="voice-play px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-600 font-bold">▶ Escuchar la voz</button>
     {% if caller %}{{ caller() }}{% endif %}
 </div>
 {% endmacro %}

@@ -41,8 +41,6 @@
            every browser and collapsed to 0 px in Chrome at desktop width */
         .play-btn { position: relative; overflow: hidden; }
         .play-btn[data-state="loading"] { cursor: progress; }
-        /* Voz y banda | Solo voz: what the play button plays (songs with a vocal stem) */
-        .listen button[aria-pressed="true"] { background: #74ACDF; color: white; }
         .play-progress { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px; background: #F6B40E;
                          transform: scaleX(0); transform-origin: left; }
         .stanzas .stanza[data-where="far"] { display: none; }
@@ -92,12 +90,7 @@
                 {% set kinds = {'exact': 'Exacto', 'partial': 'Completado', 'approx': 'Parecido'} %}
                 {% for item in results %}
                 <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
-                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}"
-                    {%- if item.voice %} data-voice-filename="{{ item.filename[:-4] }} (voz).mp3"{% endif %}
-                    data-listen="{{ 'voice' if item.voice else 'band' }}">
-                    {# what plays, downloads and is shared: the voice where there's a stem (the switch's default) #}
-                    {% set out_url = (item.clip | replace('/clip/', '/voice/', 1)) if item.voice else item.clip %}
-                    {% set out_name = (item.filename[:-4] ~ ' (voz).mp3') if item.voice else item.filename %}
+                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}">
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="flex-1 min-w-0">
                             <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
@@ -109,14 +102,7 @@
                                 class="play-btn btn-celeste w-full text-white font-bold px-5 py-3 rounded-xl shadow-md">
                                 <span class="play-label">▶ Escuchar</span><span class="play-progress" aria-hidden="true"></span>
                             </button>
-                            {% if item.voice %}
-                            <div class="listen mt-2 grid grid-cols-2 rounded-lg border-2 border-[#74ACDF] overflow-hidden text-xs font-bold text-[#74ACDF]"
-                                role="group" aria-label="Qué escuchar">
-                                <button type="button" data-listen="voice" aria-pressed="true" class="py-1">Solo voz</button>
-                                <button type="button" data-listen="band" aria-pressed="false" class="py-1">Voz y banda</button>
-                            </div>
-                            {% endif %}
-                            <audio preload="none" src="{{ out_url }}" data-clip="{{ item.clip }}"></audio>
+                            <audio preload="none" src="{{ item.clip }}"></audio>
                         </div>
                     </div>
                     <p class="lyric text-gray-700 text-lg italic">
@@ -147,22 +133,10 @@
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" hidden
                             class="share btn-celeste text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md">Compartir</button>
-                        <a download="{{ out_name }}" href="{{ out_url }}?name={{ out_name | urlencode }}"
+                        <a download="{{ item.filename }}" href="{{ item.clip }}?name={{ item.filename | urlencode }}"
                             class="download text-sm font-bold px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar</a>
-                        <button type="button" class="trim-toggle text-sm font-bold px-4 py-2 rounded-xl border-2 border-gray-300 text-gray-600 hover:border-gray-500"
-                            aria-expanded="false">✂ Recortar</button>
                         <span class="share-status text-xs text-gray-400" aria-live="polite"></span>
                     </div>
-                    {# ✂ Recortar: the visitor's own edges, for their download/share only (nothing is sent).
-                       Built from the template on first open, so a closed card has one timing editor. #}
-                    <template class="trim-template">
-                        <div class="trim-panel p-4 rounded-xl bg-gray-50 text-sm text-gray-700 space-y-2">
-                            <p class="font-bold">Recortalo a tu gusto</p>
-                            <p class="text-xs text-gray-500">Arrastrá los bordes (o tocá la onda). Escuchar, Descargar y Compartir te dan este pedazo, solo la voz o con la banda, como elegiste arriba. Es solo para vos: no se envía nada. Se ve <span class="wave-source">solo la voz</span>.</p>
-                            {% call wave.editor(voice_button=False) %}<button type="button" class="trim-play px-3 py-1 rounded-lg border-2 border-[#74ACDF] text-[#74ACDF] font-bold">▶ Escuchar el recorte</button>
-                            <button type="button" class="trim-reset px-3 py-1 rounded-lg text-gray-500 underline">Volver al original</button>{% endcall %}
-                        </div>
-                    </template>
                     {% if item.others %}
                     <div class="text-sm text-gray-500 flex flex-wrap items-center gap-2">
                         <span>Todas las veces:</span>
@@ -241,19 +215,12 @@
         try { navigator.sendBeacon('/event', new Blob([body], { type: 'application/json' })); } catch (e) {}
     }
 
-    // Solo voz | Voz y banda (card.dataset.listen): clips are kept as /clip/ URLs; with "Solo voz"
-    // the same times are played, downloaded and shared from the vocal stem (/voice/….mp3).
-    const listening = (card, url) => card.dataset.listen === 'voice' ? url.replace('/clip/', '/voice/') : url;
-    const outName = card => card.dataset.listen === 'voice' ? card.dataset.voiceFilename : card.dataset.filename;
-
     // The card's current clip: what Descargar and Compartir send. prefetch: download it now for
     // Compartir (skipped while nudging times in ¿No coincide?, which would cut a clip per click).
     function selectClip(card, url, prefetch = true) {
         card.dataset.clip = url;
-        const out = listening(card, url), download = card.querySelector('.download');
-        download.href = out + '?name=' + encodeURIComponent(outName(card));
-        download.download = outName(card);
-        if (prefetch && canShareFiles) fetchClip(out, outName(card)).catch(() => {});
+        card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
+        if (prefetch && canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
     }
 
     document.querySelectorAll('.audio-card').forEach(card => {
@@ -262,11 +229,11 @@
         button.hidden = false;
         selectClip(card, card.dataset.clip);
         button.addEventListener('click', async () => {
-            const url = listening(card, card.dataset.clip);
+            const url = card.dataset.clip;
             status.textContent = '';
             try {
                 // Already downloaded: share within the tap. Otherwise wait (iOS may then refuse).
-                const file = clipFiles.get(url) || await fetchClip(url, outName(card));
+                const file = clipFiles.get(url) || await fetchClip(url, card.dataset.filename);
                 await navigator.share({ files: [file] });
                 report(card, 'shared');
             } catch (err) {
@@ -285,12 +252,9 @@
     // audio's own events, so it also shows plays started elsewhere (other occurrences, ¿No coincide?).
     const PLAY_LABELS = { idle: '▶ Escuchar', loading: 'Cargando…', playing: '❚❚ Pausa', error: '↻ Reintentar' };
 
-    // The player keeps the clip it plays in data-clip (a /clip/ URL), played as `listening` says
     function playIn(card, url) {
         const audio = card.querySelector('audio');
-        if (url) audio.dataset.clip = url;
-        const src = listening(card, audio.dataset.clip);
-        if (audio.getAttribute('src') !== src) audio.src = src;
+        if (url) audio.src = url;
         else if (audio.error) audio.load();          // a failed source isn't fetched again by play()
         document.querySelectorAll('.audio-card audio').forEach(a => { if (a !== audio) a.pause(); });
         // AbortError = a new src replaced this one before it started: not a failure
@@ -323,19 +287,6 @@
         audio.addEventListener('emptied', () => { setPlayState(card, 'idle'); progress(); });
         audio.addEventListener('error', () => setPlayState(card, 'error'));
     });
-
-    // Solo voz | Voz y banda: switching while it plays starts the other version; otherwise the
-    // next play uses it. Descargar and Compartir follow it.
-    document.querySelectorAll('.listen button').forEach(btn => btn.addEventListener('click', () => {
-        const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
-        if (card.dataset.listen === btn.dataset.listen) return;
-        card.dataset.listen = btn.dataset.listen;
-        card.querySelectorAll('.listen button').forEach(b => b.setAttribute('aria-pressed', b === btn));
-        selectClip(card, card.dataset.clip);
-        const playing = !audio.paused;
-        if (playing) playIn(card);
-        else audio.src = listening(card, audio.dataset.clip);
-    }));
 
     // Other occurrences: play that rendition in the card's player (and share/download it)
     document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {
@@ -387,7 +338,6 @@
 
         toggle.addEventListener('click', () => {
             const open = panel.hidden;
-            if (open) closeTrim(card);                       // the report is about the clip as served
             panel.hidden = !open;
             toggle.setAttribute('aria-expanded', open);
             if (open) reset();                               // after showing it: the canvas needs its size
@@ -429,61 +379,6 @@
                 status.textContent = 'No se pudo enviar.';
             }
         });
-    });
-
-    // ✂ Recortar: the visitor moves the edges for their own copy (▶ Escuchar el recorte, Descargar,
-    // Compartir), as Solo voz / Voz y banda says. No report: nothing leaves the page. Opens on the card's
-    // current clip, so a trim survives closing and reopening; "Volver al original" undoes it.
-    function closeTrim(card) {
-        const toggle = card.querySelector('.trim-toggle'), panel = card.querySelector('.trim-panel');
-        if (!panel || panel.hidden) return;
-        panel.hidden = true;
-        toggle.setAttribute('aria-expanded', 'false');
-        WaveEditor.stopVoice();
-    }
-
-    document.querySelectorAll('.audio-card').forEach(card => {
-        const toggle = card.querySelector('.trim-toggle');
-        if (!toggle) return;
-        const parse = url => { const m = url.match(CLIP_URL); return { song: decodeURIComponent(m[1]), start: +m[2], end: +m[3] }; };
-        let panel, editor, song;
-        const trimmedUrl = () => `/clip/${encodeURIComponent(song)}/${editor.fixed.start}-${editor.fixed.end}.mp3`;
-
-        function load() {
-            const served = parse(card.dataset.served), now = parse(card.dataset.clip);
-            song = served.song;
-            editor.load(song, served, now.song === song ? now : served);
-        }
-
-        function build() {
-            const template = card.querySelector('.trim-template');
-            panel = template.content.firstElementChild.cloneNode(true);
-            template.after(panel);
-            editor = new WaveEditor(panel, {
-                onChange: () => selectClip(card, trimmedUrl(), false),
-                onVoicePlay: () => document.querySelectorAll('.audio-card audio').forEach(a => a.pause()),
-            });
-            panel.querySelector('.trim-play').addEventListener('click', () => {
-                WaveEditor.stopVoice();
-                selectClip(card, trimmedUrl());                 // and Compartir sends the trim
-                playIn(card, card.dataset.clip);
-            });
-            panel.querySelector('.trim-reset').addEventListener('click', () => {
-                selectClip(card, card.dataset.served);
-                load();
-            });
-        }
-
-        toggle.addEventListener('click', () => {
-            if (panel && !panel.hidden) return closeTrim(card);
-            const report = card.querySelector('.report-panel');
-            if (report && !report.hidden) card.querySelector('.report-toggle').click();
-            if (!panel) build();
-            panel.hidden = false;
-            toggle.setAttribute('aria-expanded', 'true');
-            load();                                          // after showing it: the canvas needs its size
-        });
-        card.addEventListener('clipchange', () => { if (panel && !panel.hidden) load(); });
     });
 
     // Suggestions while typing: lyric lines that complete the phrase

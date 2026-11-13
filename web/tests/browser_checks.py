@@ -8,7 +8,7 @@ Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
-adjustment, sending a report, reset), Solo voz | Voz y banda and ✂ Recortar, other occurrences, the play button, phone width,
+adjustment, sending a report, reset), other occurrences, the play button, phone width,
 JavaScript errors.
 """
 
@@ -245,8 +245,7 @@ def test_other_occurrence_resets_the_panel(page, base_url):
     first = card.locator(".report-start").inner_text()
     chips.nth(1).click()
     assert card.locator(".report-start").inner_text() != first          # now about the second time
-    # Descargar: that time, from the voice (Solo voz, the default with a stem)
-    assert download_href(card) == chips.nth(1).get_attribute("data-clip").replace("/clip/", "/voice/")
+    assert download_href(card) == chips.nth(1).get_attribute("data-clip")
 
 
 
@@ -316,85 +315,6 @@ def test_song_without_vocal_stem_shows_the_song(page, base_url):
     card = open_editor(page, base_url, "tren+llega+tarde")
     assert card.locator(".wave-source").inner_text() == "la canción (no hay voz separada)"
 
-# --- Solo voz | Voz y banda (what plays, downloads and is shared) and ✂ Recortar (own edges, nothing sent)
-
-@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
-def test_voice_only_by_default_and_with_the_band(page, base_url):
-    page.goto(base_url + "/search?lyric=sale+sobre")
-    card = page.locator(".audio-card").first
-    audio, play = card.locator("audio"), card.locator(".play-btn")
-    voice, band = card.get_by_role("button", name="Solo voz"), card.get_by_role("button", name="Voz y banda")
-    expect(voice).to_have_attribute("aria-pressed", "true")
-    assert card.locator(".download").count() == 1
-    assert audio.get_attribute("src") == "/voice/cancion_de_prueba/9300-10100.mp3"
-    assert download_href(card) == "/voice/cancion_de_prueba/9300-10100.mp3"
-    play.click()
-    expect(play).to_have_attribute("data-state", "idle", timeout=5000)       # 0.8 s, played to the end
-    assert audio.evaluate("a => a.error") is None
-    with page.expect_download() as d:
-        card.locator(".download").click()
-    assert d.value.suggested_filename == "Cancion De Prueba - sale sobre (voz).mp3"
-    band.click()                                                        # player and Descargar switch
-    expect(band).to_have_attribute("aria-pressed", "true")
-    assert audio.get_attribute("src") == "/clip/cancion_de_prueba/9300-10100.mp3"
-    assert download_href(card) == "/clip/cancion_de_prueba/9300-10100.mp3"
-    with page.expect_download() as d:
-        card.locator(".download").click()
-    assert d.value.suggested_filename == "Cancion De Prueba - sale sobre.mp3"
-
-
-def test_no_switch_without_a_stem(page, base_url):
-    page.goto(base_url + "/search?lyric=tren+llega+tarde")
-    card = page.locator(".audio-card").first
-    assert card.locator(".listen").count() == 0
-    assert download_href(card).startswith("/clip/") and card.locator("audio").get_attribute("src").startswith("/clip/")
-    card.get_by_role("button", name="✂ Recortar").click()
-    expect(card.locator(".trim-panel .wave-source")).to_have_text("la canción (no hay voz separada)")
-
-
-def test_trimming_moves_play_and_download_and_sends_nothing(page, base_url):
-    page.goto(base_url + "/search?lyric=sale+sobre")
-    card = page.locator(".audio-card").first
-    before = len(stored_reports())
-    card.get_by_role("button", name="✂ Recortar").click()
-    panel = card.locator(".trim-panel")
-    assert panel.locator(".voice-play").count() == 0                   # one play button: ▶ Escuchar el recorte
-    panel.locator(".wave-handle[data-edge=start]").press("Shift+ArrowLeft")
-    panel.locator(".wave-handle[data-edge=end]").press("ArrowRight")
-    assert (panel.locator(".report-start").inner_text(), panel.locator(".report-end").inner_text()) == ("0:08.3", "0:10.2")
-    assert download_href(card) == "/voice/cancion_de_prueba/8300-10200.mp3"
-    panel.get_by_text("▶ Escuchar el recorte").click()
-    assert card.locator("audio").get_attribute("src") == "/voice/cancion_de_prueba/8300-10200.mp3"
-    if HAS_FFMPEG:
-        with page.expect_download() as d:
-            card.locator(".download").click()
-        assert 1.8 <= mp3_seconds(d.value.path()) <= 2.0             # the 1.9 s trim
-    card.get_by_role("button", name="Voz y banda").click()              # the trim, with the band
-    assert download_href(card) == "/clip/cancion_de_prueba/8300-10200.mp3"
-    panel.get_by_text("▶ Escuchar el recorte").click()
-    assert card.locator("audio").get_attribute("src") == "/clip/cancion_de_prueba/8300-10200.mp3"
-    # closed and opened again: the trim is still there; "Volver al original" undoes it
-    card.get_by_role("button", name="✂ Recortar").click()
-    assert panel.is_hidden() and download_href(card).endswith("/8300-10200.mp3")
-    card.get_by_role("button", name="✂ Recortar").click()
-    assert panel.locator(".report-start").inner_text() == "0:08.3"
-    panel.get_by_text("Volver al original").click()
-    assert download_href(card) == "/clip/cancion_de_prueba/9300-10100.mp3"
-    assert len(stored_reports()) == before                             # no report
-
-
-def test_trim_and_report_panels_take_turns(page, base_url):
-    page.goto(base_url + "/search?lyric=sale+sobre")
-    card = page.locator(".audio-card").first
-    card.get_by_role("button", name="✂ Recortar").click()
-    card.locator(".trim-panel .wave-handle[data-edge=start]").press("Shift+ArrowLeft")
-    card.get_by_text("¿No coincide?").click()                         # the report is about the clip as served
-    assert card.locator(".trim-panel").is_hidden()
-    assert download_href(card).endswith("/9300-10100.mp3")
-    card.get_by_role("button", name="✂ Recortar").click()
-    assert card.locator(".report-panel").is_hidden()
-
-
 # --- play button
 
 @pytest.mark.parametrize("width", [1280, 375])
@@ -442,15 +362,14 @@ def test_other_occurrence_plays_through_the_button(page, base_url):
 
 
 def test_play_button_offers_a_retry_when_the_clip_fails(page, base_url):
-    clips = re.compile(r"/(clip|voice)/.*\.mp3")                       # Solo voz plays /voice/….mp3
-    page.route(clips, lambda route: route.fulfill(status=503, body="busy"))
+    page.route("**/clip/**", lambda route: route.fulfill(status=503, body="busy"))
     page.goto(base_url + "/search?lyric=sale+sobre")
     card = page.locator(".audio-card").first
     card.locator(".play-btn").click()
     state(card).to_have_attribute("data-state", "error")
     expect(card.locator(".play-label")).to_have_text("↻ Reintentar")
     if HAS_FFMPEG:                                                      # the retry downloads it again
-        page.unroute(clips)
+        page.unroute("**/clip/**")
         card.locator("audio").evaluate("a => a.loop = true")
         card.locator(".play-btn").click()
         state(card).to_have_attribute("data-state", "playing")
