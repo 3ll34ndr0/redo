@@ -41,6 +41,8 @@
            every browser and collapsed to 0 px in Chrome at desktop width */
         .play-btn { position: relative; overflow: hidden; }
         .play-btn[data-state="loading"] { cursor: progress; }
+        /* Resaltada | Original: what the play button, Descargar and Compartir give (songs with both stems) */
+        .listen button[aria-pressed="true"] { background: #74ACDF; color: white; }
         .play-progress { position: absolute; left: 0; bottom: 0; width: 100%; height: 4px; background: #F6B40E;
                          transform: scaleX(0); transform-origin: left; }
         .stanzas .stanza[data-where="far"] { display: none; }
@@ -90,7 +92,11 @@
                 {% set kinds = {'exact': 'Exacto', 'partial': 'Completado', 'approx': 'Parecido'} %}
                 {% for item in results %}
                 <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
-                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}">
+                    data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}"
+                    data-listen="{{ 'mix' if item.mix else 'original' }}">
+                    {# what plays, downloads and is shared: Resaltada (/mix/) where the song has both stems,
+                       otherwise Original (/original/: faded in just before the phrase) #}
+                    {% set out_url = item.clip | replace('/clip/', '/mix/' if item.mix else '/original/', 1) %}
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="flex-1 min-w-0">
                             <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
@@ -102,7 +108,15 @@
                                 class="play-btn btn-celeste w-full text-white font-bold px-5 py-3 rounded-xl shadow-md">
                                 <span class="play-label">▶ Escuchar</span><span class="play-progress" aria-hidden="true"></span>
                             </button>
-                            <audio preload="none" src="{{ item.clip }}"></audio>
+                            {% if item.mix %}
+                            <div class="listen mt-2 grid grid-cols-2 rounded-lg border-2 border-[#74ACDF] overflow-hidden text-xs font-bold text-[#74ACDF]"
+                                role="group" aria-label="Qué escuchar">
+                                <button type="button" data-listen="mix" aria-pressed="true" class="py-1"
+                                    title="La voz más adelante, y la banda entra un segundo antes">Resaltada</button>
+                                <button type="button" data-listen="original" aria-pressed="false" class="py-1">Original</button>
+                            </div>
+                            {% endif %}
+                            <audio preload="none" src="{{ out_url }}" data-clip="{{ item.clip }}"></audio>
                         </div>
                     </div>
                     <p class="lyric text-gray-700 text-lg italic">
@@ -133,7 +147,7 @@
                     <div class="flex flex-wrap items-center gap-2">
                         <button type="button" hidden
                             class="share btn-celeste text-white text-sm font-bold px-4 py-2 rounded-xl shadow-md">Compartir</button>
-                        <a download="{{ item.filename }}" href="{{ item.clip }}?name={{ item.filename | urlencode }}"
+                        <a download="{{ item.filename }}" href="{{ out_url }}?name={{ item.filename | urlencode }}"
                             class="download text-sm font-bold px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar</a>
                         <span class="share-status text-xs text-gray-400" aria-live="polite"></span>
                     </div>
@@ -215,12 +229,18 @@
         try { navigator.sendBeacon('/event', new Blob([body], { type: 'application/json' })); } catch (e) {}
     }
 
+    // Resaltada | Original (card.dataset.listen): clips are kept as /clip/ URLs (the phrase's times);
+    // they're played, downloaded and shared as /mix/ (Resaltada: voice over the band at -3 dB, the
+    // band coming in a second earlier) or /original/ (the song, faded in 0.3 s before the phrase).
+    const listening = (card, url) => url.replace('/clip/', card.dataset.listen === 'mix' ? '/mix/' : '/original/');
+
     // The card's current clip: what Descargar and Compartir send. prefetch: download it now for
     // Compartir (skipped while nudging times in ¿No coincide?, which would cut a clip per click).
     function selectClip(card, url, prefetch = true) {
         card.dataset.clip = url;
-        card.querySelector('.download').href = url + '?name=' + encodeURIComponent(card.dataset.filename);
-        if (prefetch && canShareFiles) fetchClip(url, card.dataset.filename).catch(() => {});
+        const out = listening(card, url);
+        card.querySelector('.download').href = out + '?name=' + encodeURIComponent(card.dataset.filename);
+        if (prefetch && canShareFiles) fetchClip(out, card.dataset.filename).catch(() => {});
     }
 
     document.querySelectorAll('.audio-card').forEach(card => {
@@ -229,7 +249,7 @@
         button.hidden = false;
         selectClip(card, card.dataset.clip);
         button.addEventListener('click', async () => {
-            const url = card.dataset.clip;
+            const url = listening(card, card.dataset.clip);
             status.textContent = '';
             try {
                 // Already downloaded: share within the tap. Otherwise wait (iOS may then refuse).
@@ -252,9 +272,12 @@
     // audio's own events, so it also shows plays started elsewhere (other occurrences, ¿No coincide?).
     const PLAY_LABELS = { idle: '▶ Escuchar', loading: 'Cargando…', playing: '❚❚ Pausa', error: '↻ Reintentar' };
 
+    // The player keeps the clip it plays in data-clip (a /clip/ URL), played as `listening` says
     function playIn(card, url) {
         const audio = card.querySelector('audio');
-        if (url) audio.src = url;
+        if (url) audio.dataset.clip = url;
+        const src = listening(card, audio.dataset.clip);
+        if (audio.getAttribute('src') !== src) audio.src = src;
         else if (audio.error) audio.load();          // a failed source isn't fetched again by play()
         document.querySelectorAll('.audio-card audio').forEach(a => { if (a !== audio) a.pause(); });
         // AbortError = a new src replaced this one before it started: not a failure
@@ -287,6 +310,18 @@
         audio.addEventListener('emptied', () => { setPlayState(card, 'idle'); progress(); });
         audio.addEventListener('error', () => setPlayState(card, 'error'));
     });
+
+    // Resaltada | Original: switching while it plays starts the other version; otherwise the
+    // next play uses it. Descargar and Compartir follow it.
+    document.querySelectorAll('.listen button').forEach(btn => btn.addEventListener('click', () => {
+        const card = btn.closest('.audio-card'), audio = card.querySelector('audio');
+        if (card.dataset.listen === btn.dataset.listen) return;
+        card.dataset.listen = btn.dataset.listen;
+        card.querySelectorAll('.listen button').forEach(b => b.setAttribute('aria-pressed', b === btn));
+        selectClip(card, card.dataset.clip);
+        if (!audio.paused) playIn(card);
+        else audio.src = listening(card, audio.dataset.clip);
+    }));
 
     // Other occurrences: play that rendition in the card's player (and share/download it)
     document.querySelectorAll('.occurrence').forEach(btn => btn.addEventListener('click', () => {

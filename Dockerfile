@@ -5,6 +5,10 @@ FROM python:3.12-slim
 # Standalone ffmpeg build (one file). Debian's ffmpeg package made the image 844 MB.
 COPY --from=mwader/static-ffmpeg:7.1.1 /ffmpeg /usr/local/bin/
 
+# Debian's security fixes reach the base image days after Debian ships them, and the Trivy gate
+# (deploy.yml) refuses fixable HIGH/CRITICAL ones: take them at build time (zlib1g, 2026-11-12)
+RUN apt-get update && apt-get upgrade -y --no-install-recommends && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 COPY web/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

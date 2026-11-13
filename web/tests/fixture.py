@@ -33,6 +33,8 @@ SONGS = {
     ],
 }
 VOCALS_SONG = "cancion_de_prueba"   # the only song given a vocal stem (tests/conftest.py)
+# lines whose first word's start a fix set (the words table's start_fixed): "Nadie duerme en la ciudad"
+FIXED_LINE_STARTS = {("cancion_de_prueba", 3)}
 SONG_SECONDS = 60        # length of the generated audio per song (all timings fit in it)
 WORD_S, GAP_S, START_S = 0.4, 1.5, 5.0
 
@@ -76,13 +78,16 @@ def build_db(path):
         os.remove(path)
     conn = sqlite3.connect(path)
     conn.execute("CREATE TABLE words (song TEXT, i INTEGER, w TEXT, start REAL, end REAL,"
-                 " line INTEGER, tok INTEGER, orig TEXT, stanza INTEGER, PRIMARY KEY (song, i))")
-    i, last, numbers = 0, None, stanzas()
+                 " line INTEGER, tok INTEGER, orig TEXT, stanza INTEGER, start_fixed INTEGER, PRIMARY KEY (song, i))")
+    i, last, numbers, seen = 0, None, stanzas(), set()
     for song, w, start, end, line, tok, orig in rows():
         i = 0 if song != last else i + 1
         last = song
-        conn.execute("INSERT INTO words VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                     (song, i, w, start, end, line, tok, orig, numbers[song][line]))
+        first = (song, line) not in seen        # the line's first word
+        seen.add((song, line))
+        conn.execute("INSERT INTO words VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                     (song, i, w, start, end, line, tok, orig, numbers[song][line],
+                      int(first and (song, line) in FIXED_LINE_STARTS)))
     conn.commit()
     conn.close()
 

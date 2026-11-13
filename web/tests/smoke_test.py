@@ -119,7 +119,11 @@ def run_checks(work):
     status, _, body = get(WEB + "/search?lyric=sale+sobre")
     page = re.sub(r"\s+", " ", body.decode())
     check("search finds and highlights the line", "La luna <mark>sale</mark> <mark>sobre</mark> el puerto" in page)
-    clip = re.search(r'src="(/clip/[^"]+\.mp3)"', page)
+    # the player plays Original (/original/: faded in 0.3 s before the phrase; no stems in this data);
+    # the card keeps the exact phrase (/clip/, the admin's review plays it)
+    played = re.search(r'src="(/original/[^"]+\.mp3)"', page)
+    check("search result plays the faded-in original", bool(played))
+    clip = re.search(r'data-clip="(/clip/[^"]+\.mp3)"', page)
     check("search result has a clip", bool(clip))
 
     status, _, body = get(WEB + "/search?lyric=tanbor")
@@ -134,6 +138,11 @@ def run_checks(work):
         # "sale sobre" is 2 words of 0.4 s, cut exactly (no padding)
         check("clip is a playable mp3 of the right length", seconds is not None and 0.7 <= seconds <= 0.9,
               f"status {status}, {headers.get('Content-Type')}, {len(body)} bytes, {seconds} s")
+        if played:
+            status, headers, body = get(WEB + played.group(1))
+            seconds = mp3_seconds(body, work) if status == 200 else None
+            check("original is the phrase + its 0.3 s fade-in (re-encoded)", seconds is not None and 1.0 <= seconds <= 1.2,
+                  f"status {status}, {headers.get('Content-Type')}, {len(body)} bytes, {seconds} s")
         status, headers, _ = get(WEB + clip.group(1) + "?name=Prueba.mp3")
         check("download sends an attachment", status == 200 and "attachment" in headers.get("Content-Disposition", ""))
         # the timing editor's window: no vocals/ folder in this data, so the song itself
@@ -158,6 +167,7 @@ def run_checks(work):
     check("metrics on port 9100", status == 200 and "extractos_http_requests_total" in text, str(status))
     check("metrics count the search", (sample('extractos_searches_total{outcome="exact"}') or 0) >= 1)
     check("metrics count the clip cut", (sample('extractos_clips_total{kind="play",result="cut"}') or 0) >= 1)
+    check("metrics count the original cut", (sample('extractos_clips_total{kind="original_play",result="cut"}') or 0) >= 1)
     check("metrics count the share", (sample('extractos_shares_total{result="shared"}') or 0) >= 1)
     check("metrics count the report", (sample('extractos_clip_reports_total{problem="timing"}') or 0) >= 1)
     check("metrics see the index", sample("extractos_index_songs") == len(fixture.SONGS))

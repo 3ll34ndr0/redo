@@ -137,6 +137,133 @@ def test_voice_window(client, song, source):
         assert abs(w.getnframes() / 16000 - 10.8) < 0.01      # sample 0 is 4.3 s, no padding
     assert metric("extractos_clips_total", result="cut", kind="voice") == before + 1
 
+def test_resaltada_is_the_default_where_there_are_both_stems(client):
+    """Resaltada | Original starts on Resaltada: the player and Descargar give /mix/….mp3."""
+    page = client.get("/search?lyric=sale+sobre").get_data(as_text=True).split("<footer")[0]
+    assert 'data-listen="mix"' in page and 'class="listen' in page
+    assert 'src="/mix/cancion_de_prueba/9300-10100.mp3"' in page
+    assert 'href="/mix/cancion_de_prueba/9300-10100.mp3?name=' in page
+    without = client.get("/search?lyric=tren+llega+tarde").get_data(as_text=True).split("<footer")[0]
+    assert 'data-listen="original"' in without and 'class="listen' not in without and "/mix/" not in without
+    assert 'src="/original/otra_cancion/' in without and 'href="/original/otra_cancion/' in without
+
+
+@pytest.mark.parametrize("url", [
+    "/mix/no_such_song/1000-2000.mp3",             # unknown song
+    "/mix/otra_cancion/1000-2000.mp3",             # no stems: never the plain clip instead
+    "/mix/cancion_de_prueba/3000-2000.mp3",        # ends before it starts
+    "/mix/cancion_de_prueba/0-61000.mp3",          # longer than 60 s, like /clip
+])
+def test_bad_mix_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+def mp3_levels(data, step_s):
+    """RMS level (dB) of each step_s of an mp3, and its duration."""
+    import subprocess
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as f:
+        f.write(data)
+        f.flush()
+        n = int(44100 * step_s)
+        out = subprocess.run(["ffmpeg", "-v", "error", "-i", f.name, "-af",
+                              f"asetnsamples={n},astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+                              "-f", "null", "-"], capture_output=True, text=True).stdout
+        duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f.name],
+                                        capture_output=True, text=True).stdout)
+    return [float(line.split("=")[1]) for line in out.splitlines() if "RMS_level" in line], duration
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+def test_mix_leads_with_the_band_fading_in(client):
+    """Resaltada: a second of band fading in before the phrase, then voice + band; stereo mp3."""
+    before = metric("extractos_clips_total", result="cut", kind="mix_play")
+    r = client.get("/mix/cancion_de_prueba/5000-7000.mp3")
+    assert r.status_code == 200 and r.mimetype == "audio/mpeg"
+    assert "max-age=86400" in r.headers["Cache-Control"]
+    assert metric("extractos_clips_total", result="cut", kind="mix_play") == before + 1
+    levels, duration = mp3_levels(r.data, 0.25)
+    # 1 s lead + the 2 s phrase, from 0.1 s earlier (5 s is the song's first word: the aligner's start)
+    assert 3.05 <= duration <= 3.2
+    assert levels[0] < levels[1] < levels[2] < levels[3] - 1            # the fade-in
+    assert levels[5] > levels[3] + 1                                    # the voice comes in at 1 s
+    # near the song's start the lead is what there is: 0.4 s
+    _, duration = mp3_levels(client.get("/mix/cancion_de_prueba/400-1400.mp3").data, 0.25)
+    assert 1.35 <= duration <= 1.5
+    r = client.get("/mix/cancion_de_prueba/5000-7000.mp3?name=Prueba%20-%20vamos.mp3")
+    assert r.headers["Content-Disposition"].startswith("attachment")
+    assert metric("extractos_clips_total", result="cached", kind="mix_download") >= 1
+
+
+@pytest.mark.parametrize("url", [
+    "/original/no_such_song/1000-2000.mp3",        # unknown song
+    "/original/cancion_de_prueba/3000-2000.mp3",   # ends before it starts
+    "/original/cancion_de_prueba/0-61000.mp3",     # longer than 60 s, like /clip
+])
+def test_bad_original_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+def test_original_fades_in_before_the_phrase(client):
+    """Original: the song from 0.3 s before the phrase, fading in over those 0.3 s."""
+    before = metric("extractos_clips_total", result="cut", kind="original_play")
+    r = client.get("/original/otra_cancion/5000-7000.mp3")
+    assert r.status_code == 200 and r.mimetype == "audio/mpeg"
+    assert metric("extractos_clips_total", result="cut", kind="original_play") == before + 1
+    levels, duration = mp3_levels(r.data, 0.1)
+    assert 2.35 <= duration <= 2.5                                      # 0.3 s lead + 0.1 s earlier + the 2 s phrase
+    assert levels[0] < levels[1] < levels[2] < levels[4] - 1            # the fade-in, then the steady tone
+    _, duration = mp3_levels(client.get("/original/otra_cancion/100-1100.mp3").data, 0.1)
+    assert 1.05 <= duration <= 1.2                                      # near the start: a 0.1 s lead
+    # /clip/ stays the exact phrase (the admin's review)
+    _, duration = mp3_levels(client.get("/clip/otra_cancion/5000-7000.mp3").data, 0.1)
+    assert 1.95 <= duration <= 2.1
+
+
+def test_earlier_starts_only_for_the_aligners_starts():
+    """0.1 s earlier, cut at the previous word's end; starts a fix set (and other times) don't move."""
+    import fixture
+    rows = fixture.rows()
+    fixed = {(song, tok) for song, _, _, _, line, tok, _ in rows if (song, line) in fixture.FIXED_LINE_STARTS}
+    fixed = {min(fixed)}                                               # its first word only, as the DB marks it
+    earlier = app_module.earlier_starts(rows, fixed)["cancion_de_prueba"]
+    assert earlier[5000] == 100                                        # the song's first word
+    assert earlier[8500] == 100                                        # a line's first word (1.5 s gap before)
+    assert earlier[9300] == 0                                          # mid-line: the previous word ends there
+    assert earlier[15900] == 0                                         # "Nadie": its start was corrected
+    assert 9250 not in earlier                                         # not a word's start: a visitor's own edge
+    # the previous word ("noche", to 7.0 s) ends 40 ms before: only those 40 ms
+    close = [r[:2] + (7.04,) + r[3:] if r[0] == "cancion_de_prueba" and r[2] == 8.5 else r for r in rows]
+    assert app_module.earlier_starts(close, set())["cancion_de_prueba"][7040] == 40
+
+
+def test_a_provisional_start_is_not_moved():
+    """A report's start (staging applies them at once) counts as a correction too."""
+    import fixture
+    rows = [r for r in fixture.rows() if r[0] == "otra_cancion"]
+    first = next(r for r in rows if r[1] == "brillar")                 # "Brillar no cuesta nada"
+    report = {"id": 1, "created_at": "2026-11-13T00:00:00Z", "song": "otra_cancion", "status": "provisional",
+              "start_ms": int(first[2] * 1000), "end_ms": int(first[3] * 1000), "first_tok": first[5], "last_tok": first[5],
+              "first_word": first[6], "last_word": first[6], "fixed_start_ms": int(first[2] * 1000) - 300,
+              "fixed_end_ms": int(first[3] * 1000)}
+    out, applied, problems, starts = app_module.with_fixes(rows, [report])
+    assert applied and not problems and starts == {("otra_cancion", first[5])}
+    assert app_module.earlier_starts(out, starts)["otra_cancion"][int(first[2] * 1000) - 300] == 0
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+@pytest.mark.parametrize("times, seconds", [
+    ("8500-9300", 1.2),          # a line's first word: 0.3 s fade + 0.1 s earlier + 0.8 s
+    ("9300-10100", 1.1),         # mid-line: no room before it
+    ("15900-16700", 1.1),        # a corrected start
+    ("9250-10100", 1.15),        # a visitor's own edge
+])
+def test_original_starts_earlier_only_where_the_aligner_placed_it(client, times, seconds):
+    _, duration = mp3_levels(client.get(f"/original/cancion_de_prueba/{times}.mp3").data, 0.1)
+    assert 0 <= duration - seconds <= 0.07                              # the encoder adds ~0.05 s
+
+
 def test_share_events(client):
     before = metric("extractos_shares_total", result="shared")
     assert client.post("/event", data=json.dumps({"type": "share", "result": "shared"})).status_code == 204

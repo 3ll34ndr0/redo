@@ -8,7 +8,7 @@ Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
-adjustment, sending a report, reset), other occurrences, the play button, phone width,
+adjustment, sending a report, reset), Resaltada | Original, other occurrences, the play button, phone width,
 JavaScript errors.
 """
 
@@ -180,6 +180,7 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     card = page.locator(".audio-card").first
     served = download_href(card)
     assert served.endswith("/9300-10100.mp3")
+    card.get_by_role("button", name="Original").click()                 # the song: the edges + its 0.3 s fade-in
     card.get_by_text("¿No coincide?").click()
     start, end = card.locator(".wave-handle[data-edge=start]"), card.locator(".wave-handle[data-edge=end]")
     start.press("ArrowLeft")                                            # keyboard: 0.1 s
@@ -190,8 +191,8 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the edges
     with page.expect_download() as d:
         card.locator(".download").click()
-    # exactly the 2.0 s adjusted (mp3 frames: a few hundredths more or less)
-    assert 1.9 <= mp3_seconds(d.value.path()) <= 2.1
+    # exactly the 2.0 s adjusted + the 0.3 s fade-in (mp3 frames: a few hundredths more or less)
+    assert 2.2 <= mp3_seconds(d.value.path()) <= 2.4
     card.get_by_text("▶ Escuchar el ajuste").click()
     assert card.locator("audio").get_attribute("src").endswith("/9100-11100.mp3")
 
@@ -245,7 +246,8 @@ def test_other_occurrence_resets_the_panel(page, base_url):
     first = card.locator(".report-start").inner_text()
     chips.nth(1).click()
     assert card.locator(".report-start").inner_text() != first          # now about the second time
-    assert download_href(card) == chips.nth(1).get_attribute("data-clip")
+    # Descargar: that time as Resaltada (the default with both stems)
+    assert download_href(card) == chips.nth(1).get_attribute("data-clip").replace("/clip/", "/mix/")
 
 
 
@@ -315,6 +317,42 @@ def test_song_without_vocal_stem_shows_the_song(page, base_url):
     card = open_editor(page, base_url, "tren+llega+tarde")
     assert card.locator(".wave-source").inner_text() == "la canción (no hay voz separada)"
 
+# --- Resaltada | Original (what plays, downloads and is shared)
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg for real audio")
+def test_resaltada_by_default_and_the_original(page, base_url):
+    page.goto(base_url + "/search?lyric=sale+sobre")
+    card = page.locator(".audio-card").first
+    audio, play = card.locator("audio"), card.locator(".play-btn")
+    mix, original = card.get_by_role("button", name="Resaltada"), card.get_by_role("button", name="Original")
+    expect(mix).to_have_attribute("aria-pressed", "true")
+    assert audio.get_attribute("src") == "/mix/cancion_de_prueba/9300-10100.mp3"
+    assert download_href(card) == "/mix/cancion_de_prueba/9300-10100.mp3"
+    play.click()
+    expect(play).to_have_attribute("data-state", "idle", timeout=5000)       # 1.8 s, played to the end
+    assert audio.evaluate("a => a.error") is None
+    with page.expect_download() as d:
+        card.locator(".download").click()
+    assert 1.75 <= mp3_seconds(d.value.path()) <= 1.9                 # 1 s lead + the 0.8 s phrase
+    original.click()                                                    # player and Descargar switch
+    expect(original).to_have_attribute("aria-pressed", "true")
+    assert audio.get_attribute("src") == "/original/cancion_de_prueba/9300-10100.mp3"
+    assert download_href(card) == "/original/cancion_de_prueba/9300-10100.mp3"
+    # an adjustment in ¿No coincide? plays in the chosen version
+    mix.click()
+    card.get_by_text("¿No coincide?").click()
+    card.locator(".wave-handle[data-edge=start]").press("Shift+ArrowLeft")
+    card.get_by_text("▶ Escuchar el ajuste").click()
+    assert audio.get_attribute("src") == "/mix/cancion_de_prueba/8300-10100.mp3"
+
+
+def test_no_switch_without_stems(page, base_url):
+    page.goto(base_url + "/search?lyric=tren+llega+tarde")
+    card = page.locator(".audio-card").first
+    assert card.locator(".listen").count() == 0
+    assert download_href(card).startswith("/original/") and card.locator("audio").get_attribute("src").startswith("/original/")
+
+
 # --- play button
 
 @pytest.mark.parametrize("width", [1280, 375])
@@ -362,14 +400,15 @@ def test_other_occurrence_plays_through_the_button(page, base_url):
 
 
 def test_play_button_offers_a_retry_when_the_clip_fails(page, base_url):
-    page.route("**/clip/**", lambda route: route.fulfill(status=503, body="busy"))
+    clips = re.compile(r"/(clip|mix|original)/.*\.mp3")                # Resaltada /mix/, Original /original/
+    page.route(clips, lambda route: route.fulfill(status=503, body="busy"))
     page.goto(base_url + "/search?lyric=sale+sobre")
     card = page.locator(".audio-card").first
     card.locator(".play-btn").click()
     state(card).to_have_attribute("data-state", "error")
     expect(card.locator(".play-label")).to_have_text("↻ Reintentar")
     if HAS_FFMPEG:                                                      # the retry downloads it again
-        page.unroute("**/clip/**")
+        page.unroute(clips)
         card.locator("audio").evaluate("a => a.loop = true")
         card.locator(".play-btn").click()
         state(card).to_have_attribute("data-state", "playing")
