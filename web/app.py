@@ -35,6 +35,9 @@ MIX_BAND_DB = -3
 MIX_LEAD_MS = 1000                    # the band's fade-in, ending where the voice starts
 MIX_BITRATE = "128k"
 ORIGINAL_LEAD_MS = 300                # Original (/original/): the song fades in this long before the phrase
+# /mix/ and /original/ start a phrase this much before the aligner's start (CTC places it a little
+# late), never before the previous word's end; starts set by a correction (fixes) don't move.
+CTC_START_EARLIER_MS = 100
 SNIPPET_DIR = os.getenv("SNIPPET_CACHE_DIR") or os.path.join(app.static_folder, "snippets")
 MAX_RESULTS = 10
 MAX_CLIP_S = 60
@@ -83,13 +86,14 @@ obs.init(app, SNIPPET_DIR)      # metrics port, JSON logs, traces (see observabi
 # Search index over every sung word of every song (a few thousand rows), loaded once
 # and rebuilt when the database file changes or when the provisional timing fixes from
 # visitors' reports change (checked every REPORTS_RECHECK_S, and right after a report).
-_index = {"mtime": None, "rows": None, "baked": set(), "stanzas": {}, "fixes": None, "checked": 0.0, "index": None}
+_index = {"mtime": None, "rows": None, "baked": set(), "stanzas": {}, "starts_fixed": set(), "fixes": None,
+          "checked": 0.0, "index": None, "earlier": {}}
 _index_lock = threading.Lock()
 
 
 def load_base():
-    """The search database: its rows, the reports already baked into it (fixes table) and
-    the stanza of each line ({song: {line: stanza}})."""
+    """The search database: its rows, the reports already baked into it (fixes table), the
+    stanza of each line ({song: {line: stanza}}) and the words whose start a fix set {(song, tok)}."""
     with obs.tracer.start_as_current_span("index.load"):
         # read-only: on the server the database sits on a read-only mount
         with closing(sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)) as conn:
@@ -108,20 +112,49 @@ def load_base():
                     stanzas.setdefault(song, {})[line] = stanza
             except sqlite3.OperationalError:     # built before stanza numbers: no stanzas shown
                 pass
-    return rows, baked, stanzas
+            try:
+                starts_fixed = set(conn.execute("SELECT DISTINCT song, tok FROM words WHERE start_fixed"))
+            except sqlite3.OperationalError:     # built before start_fixed: every start counts as the aligner's
+                starts_fixed = set()
+    return rows, baked, stanzas, starts_fixed
 
 
 def with_fixes(rows, reports_rows):
-    """rows with the reports' adjustments applied (web/fixes.py). Returns (rows, applied, problems)."""
+    """rows with the reports' adjustments applied (web/fixes.py). Returns (rows, applied, problems,
+    starts set {(song, tok)}: the first word of each phrase they gave a start)."""
     if not reports_rows:
-        return rows, [], []
+        return rows, [], [], set()
     words = {}
     for song, _, start, end, _, tok, orig in rows:
         words.setdefault(song, {})[tok] = (orig, start, end)
     times, deleted, applied, problems = fixes.apply(words, [fixes.from_report(r) for r in reports_rows])
     out = [(song, w, round(times[song][tok][0], 3), round(times[song][tok][1], 3), line, tok, orig)
            for song, w, _, _, line, tok, orig in rows if (song, tok) not in deleted]
-    return out, applied, problems
+    starts = set()
+    for f in applied:
+        toks = [t for t in range(f["first"], f["last"] + 1) if t in times[f["song"]] and (f["song"], t) not in deleted]
+        if "start" in f and toks:
+            starts.add((f["song"], toks[0]))
+    return out, applied, problems, starts
+
+
+def earlier_starts(rows, starts_fixed):
+    """{song: {start_ms: ms}}: how much earlier /mix/ and /original/ start a phrase that begins at a
+    word's start (clip_url's ms): CTC_START_EARLIER_MS, cut at the previous word's end; 0 for a
+    start a fix set. Other start times (a visitor's own edges) aren't in it: they don't move."""
+    out, last = {}, (None, None, 0.0)          # previous (song, tok, end)
+    for song, _, start, end, _, tok, _ in rows:
+        prev_song, prev_tok, prev_end = last
+        if song != prev_song:
+            prev_end = 0.0
+        elif tok == prev_tok:                 # a token split in several words ("to-to-todo"): same timing
+            continue
+        ms = int(start * 1000)
+        shift = 0 if (song, tok) in starts_fixed else max(0, min(CTC_START_EARLIER_MS, ms - int(prev_end * 1000)))
+        song_out = out.setdefault(song, {})
+        song_out[ms] = min(shift, song_out.get(ms, shift))
+        last = (song, tok, end)
+    return out
 
 
 def get_index():
@@ -133,14 +166,15 @@ def get_index():
         t0 = time.perf_counter()
         base_changed = _index["mtime"] != mtime
         if base_changed:
-            _index["rows"], _index["baked"], _index["stanzas"] = load_base()
+            _index["rows"], _index["baked"], _index["stanzas"], _index["starts_fixed"] = load_base()
         reports_rows = [r for r in reports.applied() if fixes.report_key(r) not in _index["baked"]
                         and (AUTO_APPLY or r["status"] in ("accepted", "deleted"))] if reports else []
         _index["checked"] = now
         if base_changed or reports_rows != _index["fixes"]:
-            rows, applied, problems = with_fixes(_index["rows"], reports_rows)
+            rows, applied, problems, starts = with_fixes(_index["rows"], reports_rows)
             ix = Index(rows, _index["stanzas"])
-            _index.update(mtime=mtime, fixes=reports_rows, index=ix)
+            _index.update(mtime=mtime, fixes=reports_rows, index=ix,
+                          earlier=earlier_starts(rows, _index["starts_fixed"] | starts))
             obs.INDEX_SONGS.set(len(ix.songs))
             obs.INDEX_WORDS.set(len(rows))
             obs.INDEX_LOADED.set_to_current_time()
@@ -392,11 +426,13 @@ def clip(song, start_ms, end_ms):
 
 
 def send_mixed(song, start_ms, end_ms, kind, inputs, ffmpeg_args):
-    """A version of the phrase start..end (ms) re-encoded by ffmpeg (ffmpeg_args, without the output),
-    from the files `inputs` (404 if one is missing); cut on first request and cached under kind.
-    ?name=<file name> sends it as a download with that name."""
+    """A version of the phrase start..end (ms) re-encoded by ffmpeg, from the files `inputs` (404 if
+    one is missing); cut on first request and cached under kind. The phrase starts earlier when
+    start_ms is the aligner's start of a word (earlier_starts): ffmpeg_args(start) gives the
+    arguments (without the output) for the start used. ?name=<file name>: a download with that name."""
     if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
         abort(404)
+    start_ms -= _index["earlier"].get(song, {}).get(start_ms, 0)
     name = os.path.basename(request.args.get('name', ''))
     output_path = os.path.join(SNIPPET_DIR, f"{kind}_{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
     kind += '_download' if name else '_play'
@@ -404,7 +440,7 @@ def send_mixed(song, start_ms, end_ms, kind, inputs, ffmpeg_args):
     if not os.path.exists(output_path):
         if not all(os.path.exists(path) for path in inputs):
             abort(404)
-        result, ffmpeg_ms = cut(ffmpeg_args, output_path, song, start_ms, end_ms)
+        result, ffmpeg_ms = cut(ffmpeg_args(start_ms), output_path, song, start_ms, end_ms)
     obs.CLIPS.labels(result, kind).inc()
     obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind=kind, ffmpeg_ms=ffmpeg_ms)
     if not os.path.exists(output_path):
@@ -423,16 +459,18 @@ def mix(song, start_ms, end_ms):
     level when the voice comes in; both stop at end. The file is MIX_LEAD_MS longer than the clip
     (less near the song's start). MIX_BITRATE stereo. 404 without both stems."""
     voice_path, band_path = (os.path.join(d, f"{song}.mp3") for d in (VOCALS_DIR, BAND_DIR))
-    lead = min(MIX_LEAD_MS, start_ms)
-    band = f"[0:a]volume={MIX_BAND_DB}dB" + (f",afade=t=in:st=0:d={lead / 1000}" if lead else "") + "[b]"
-    # the voice copies are mono: on both sides at their own level (aformat's upmix is 3 dB lower)
-    voice = f"[1:a]aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0,adelay={lead}:all=1[v]"
-    # -ss before -i while re-encoding is exact; amix without normalize keeps both levels as they are
-    return send_mixed(song, start_ms, end_ms, 'mix', [voice_path, band_path], [
-        '-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', band_path,
-        '-ss', str(start_ms / 1000), '-t', str((end_ms - start_ms) / 1000), '-i', voice_path,
-        '-filter_complex', f"{band};{voice};[b][v]amix=inputs=2:duration=first:normalize=0[out]",
-        '-map', '[out]', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'])
+
+    def args(start):
+        lead = min(MIX_LEAD_MS, start)
+        band = f"[0:a]volume={MIX_BAND_DB}dB" + (f",afade=t=in:st=0:d={lead / 1000}" if lead else "") + "[b]"
+        # the voice copies are mono: on both sides at their own level (aformat's upmix is 3 dB lower)
+        voice = f"[1:a]aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0,adelay={lead}:all=1[v]"
+        # -ss before -i while re-encoding is exact; amix without normalize keeps both levels as they are
+        return ['-ss', str((start - lead) / 1000), '-t', str((end_ms - start + lead) / 1000), '-i', band_path,
+                '-ss', str(start / 1000), '-t', str((end_ms - start) / 1000), '-i', voice_path,
+                '-filter_complex', f"{band};{voice};[b][v]amix=inputs=2:duration=first:normalize=0[out]",
+                '-map', '[out]', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3']
+    return send_mixed(song, start_ms, end_ms, 'mix', [voice_path, band_path], args)
 
 
 @app.route('/original/<song>/<int:start_ms>-<int:end_ms>.mp3')
@@ -440,14 +478,16 @@ def mix(song, start_ms, end_ms):
 @limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
 def original(song, start_ms, end_ms):
     """Original as visitors get it: the song from ORIGINAL_LEAD_MS before the phrase (less near the
-    song's start), fading in over that lead, to its end. MIX_BITRATE stereo. /clip/ stays the exact
+    song's start), fading in over that lead, to its end. The phrase's start as in send_mixed. MIX_BITRATE stereo. /clip/ stays the exact
     phrase (the admin's review plays it)."""
     music_path = os.path.join(MUSIC_DIR, f"{song}.mp3")
-    lead = min(ORIGINAL_LEAD_MS, start_ms)
-    fade = ['-af', f"afade=t=in:st=0:d={lead / 1000}"] if lead else []
-    return send_mixed(song, start_ms, end_ms, 'original', [music_path], [
-        '-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', music_path,
-        *fade, '-map', '0:a', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'])
+
+    def args(start):
+        lead = min(ORIGINAL_LEAD_MS, start)
+        fade = ['-af', f"afade=t=in:st=0:d={lead / 1000}"] if lead else []
+        return ['-ss', str((start - lead) / 1000), '-t', str((end_ms - start + lead) / 1000), '-i', music_path,
+                *fade, '-map', '0:a', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3']
+    return send_mixed(song, start_ms, end_ms, 'original', [music_path], args)
 
 
 @app.route('/voice/<song>/<int:start_ms>-<int:end_ms>.wav')
