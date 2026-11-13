@@ -180,7 +180,7 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     card = page.locator(".audio-card").first
     served = download_href(card)
     assert served.endswith("/9300-10100.mp3")
-    card.get_by_role("button", name="Original").click()                 # the plain clip: its length is the edges'
+    card.get_by_role("button", name="Original").click()                 # the song: the edges + its 0.3 s fade-in
     card.get_by_text("¿No coincide?").click()
     start, end = card.locator(".wave-handle[data-edge=start]"), card.locator(".wave-handle[data-edge=end]")
     start.press("ArrowLeft")                                            # keyboard: 0.1 s
@@ -191,8 +191,8 @@ def test_adjusting_moves_preview_and_download(page, base_url):
     assert download_href(card).endswith("/9100-11100.mp3")            # Descargar follows the edges
     with page.expect_download() as d:
         card.locator(".download").click()
-    # exactly the 2.0 s adjusted (mp3 frames: a few hundredths more or less)
-    assert 1.9 <= mp3_seconds(d.value.path()) <= 2.1
+    # exactly the 2.0 s adjusted + the 0.3 s fade-in (mp3 frames: a few hundredths more or less)
+    assert 2.2 <= mp3_seconds(d.value.path()) <= 2.4
     card.get_by_text("▶ Escuchar el ajuste").click()
     assert card.locator("audio").get_attribute("src").endswith("/9100-11100.mp3")
 
@@ -336,8 +336,8 @@ def test_resaltada_by_default_and_the_original(page, base_url):
     assert 1.75 <= mp3_seconds(d.value.path()) <= 1.9                 # 1 s lead + the 0.8 s phrase
     original.click()                                                    # player and Descargar switch
     expect(original).to_have_attribute("aria-pressed", "true")
-    assert audio.get_attribute("src") == "/clip/cancion_de_prueba/9300-10100.mp3"
-    assert download_href(card) == "/clip/cancion_de_prueba/9300-10100.mp3"
+    assert audio.get_attribute("src") == "/original/cancion_de_prueba/9300-10100.mp3"
+    assert download_href(card) == "/original/cancion_de_prueba/9300-10100.mp3"
     # an adjustment in ¿No coincide? plays in the chosen version
     mix.click()
     card.get_by_text("¿No coincide?").click()
@@ -350,7 +350,7 @@ def test_no_switch_without_stems(page, base_url):
     page.goto(base_url + "/search?lyric=tren+llega+tarde")
     card = page.locator(".audio-card").first
     assert card.locator(".listen").count() == 0
-    assert download_href(card).startswith("/clip/") and card.locator("audio").get_attribute("src").startswith("/clip/")
+    assert download_href(card).startswith("/original/") and card.locator("audio").get_attribute("src").startswith("/original/")
 
 
 # --- play button
@@ -400,7 +400,7 @@ def test_other_occurrence_plays_through_the_button(page, base_url):
 
 
 def test_play_button_offers_a_retry_when_the_clip_fails(page, base_url):
-    clips = re.compile(r"/(clip|mix)/.*\.mp3")                         # Resaltada plays /mix/….mp3
+    clips = re.compile(r"/(clip|mix|original)/.*\.mp3")                # Resaltada /mix/, Original /original/
     page.route(clips, lambda route: route.fulfill(status=503, body="busy"))
     page.goto(base_url + "/search?lyric=sale+sobre")
     card = page.locator(".audio-card").first

@@ -94,8 +94,9 @@
                 <div class="audio-card rounded-2xl p-6 shadow-xl border-t-4 border-[#F6B40E] flex flex-col gap-3"
                     data-clip="{{ item.clip }}" data-served="{{ item.clip }}" data-filename="{{ item.filename }}"
                     data-listen="{{ 'mix' if item.mix else 'original' }}">
-                    {# what plays, downloads and is shared: Resaltada (/mix/) where the song has both stems #}
-                    {% set out_url = (item.clip | replace('/clip/', '/mix/', 1)) if item.mix else item.clip %}
+                    {# what plays, downloads and is shared: Resaltada (/mix/) where the song has both stems,
+                       otherwise Original (/original/: faded in just before the phrase) #}
+                    {% set out_url = item.clip | replace('/clip/', '/mix/' if item.mix else '/original/', 1) %}
                     <div class="flex flex-col md:flex-row md:items-center justify-between gap-4">
                         <div class="flex-1 min-w-0">
                             <span class="text-xs font-bold uppercase tracking-widest text-[#74ACDF]">Canción · {{ item.time }}</span>
@@ -229,9 +230,9 @@
     }
 
     // Resaltada | Original (card.dataset.listen): clips are kept as /clip/ URLs (the phrase's times);
-    // Resaltada plays, downloads and shares the same times as /mix/ (voice over the band at -3 dB,
-    // the band coming in a second earlier).
-    const listening = (card, url) => card.dataset.listen === 'mix' ? url.replace('/clip/', '/mix/') : url;
+    // they're played, downloaded and shared as /mix/ (Resaltada: voice over the band at -3 dB, the
+    // band coming in a second earlier) or /original/ (the song, faded in 0.3 s before the phrase).
+    const listening = (card, url) => url.replace('/clip/', card.dataset.listen === 'mix' ? '/mix/' : '/original/');
 
     // The card's current clip: what Descargar and Compartir send. prefetch: download it now for
     // Compartir (skipped while nudging times in ¿No coincide?, which would cut a clip per click).

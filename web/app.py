@@ -34,6 +34,7 @@ BAND_DIR = os.getenv("BAND_PATH") or os.path.join(os.path.dirname(os.path.abspat
 MIX_BAND_DB = -3
 MIX_LEAD_MS = 1000                    # the band's fade-in, ending where the voice starts
 MIX_BITRATE = "128k"
+ORIGINAL_LEAD_MS = 300                # Original (/original/): the song fades in this long before the phrase
 SNIPPET_DIR = os.getenv("SNIPPET_CACHE_DIR") or os.path.join(app.static_folder, "snippets")
 MAX_RESULTS = 10
 MAX_CLIP_S = 60
@@ -390,35 +391,20 @@ def clip(song, start_ms, end_ms):
     return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
 
 
-@app.route('/mix/<song>/<int:start_ms>-<int:end_ms>.mp3')
-@limiter.limit("60/minute;600/hour")
-@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
-def mix(song, start_ms, end_ms):
-    """Resaltada: the phrase start..end (ms) from the vocal stem, over the band stem MIX_BAND_DB
-    lower. The band starts MIX_LEAD_MS earlier with a fade-in of that length, so it's at its full
-    level when the voice comes in; both stop at end. The file is MIX_LEAD_MS longer than the clip
-    (less near the song's start). Re-encoded (MIX_BITRATE stereo), cut on first request and cached.
-    ?name=<file name> sends it as a download with that name. 404 without both stems."""
+def send_mixed(song, start_ms, end_ms, kind, inputs, ffmpeg_args):
+    """A version of the phrase start..end (ms) re-encoded by ffmpeg (ffmpeg_args, without the output),
+    from the files `inputs` (404 if one is missing); cut on first request and cached under kind.
+    ?name=<file name> sends it as a download with that name."""
     if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
         abort(404)
-    voice_path, band_path = (os.path.join(d, f"{song}.mp3") for d in (VOCALS_DIR, BAND_DIR))
     name = os.path.basename(request.args.get('name', ''))
-    kind = 'mix_download' if name else 'mix_play'
-    output_path = os.path.join(SNIPPET_DIR, f"mix_{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
+    output_path = os.path.join(SNIPPET_DIR, f"{kind}_{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
+    kind += '_download' if name else '_play'
     result, ffmpeg_ms = 'cached', None
     if not os.path.exists(output_path):
-        if not (os.path.exists(voice_path) and os.path.exists(band_path)):
+        if not all(os.path.exists(path) for path in inputs):
             abort(404)
-        lead = min(MIX_LEAD_MS, start_ms)
-        band = f"[0:a]volume={MIX_BAND_DB}dB" + (f",afade=t=in:st=0:d={lead / 1000}" if lead else "") + "[b]"
-        # the voice copies are mono: on both sides at their own level (aformat's upmix is 3 dB lower)
-        voice = f"[1:a]aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0,adelay={lead}:all=1[v]"
-        # -ss before -i while re-encoding is exact; amix without normalize keeps both levels as they are
-        result, ffmpeg_ms = cut(['-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', band_path,
-                                 '-ss', str(start_ms / 1000), '-t', str((end_ms - start_ms) / 1000), '-i', voice_path,
-                                 '-filter_complex', f"{band};{voice};[b][v]amix=inputs=2:duration=first:normalize=0[out]",
-                                 '-map', '[out]', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'],
-                                output_path, song, start_ms, end_ms)
+        result, ffmpeg_ms = cut(ffmpeg_args, output_path, song, start_ms, end_ms)
     obs.CLIPS.labels(result, kind).inc()
     obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind=kind, ffmpeg_ms=ffmpeg_ms)
     if not os.path.exists(output_path):
@@ -426,6 +412,42 @@ def mix(song, start_ms, end_ms):
     if name:
         return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
     return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
+
+
+@app.route('/mix/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def mix(song, start_ms, end_ms):
+    """Resaltada: the phrase start..end (ms) from the vocal stem, over the band stem MIX_BAND_DB
+    lower. The band starts MIX_LEAD_MS earlier with a fade-in of that length, so it's at its full
+    level when the voice comes in; both stop at end. The file is MIX_LEAD_MS longer than the clip
+    (less near the song's start). MIX_BITRATE stereo. 404 without both stems."""
+    voice_path, band_path = (os.path.join(d, f"{song}.mp3") for d in (VOCALS_DIR, BAND_DIR))
+    lead = min(MIX_LEAD_MS, start_ms)
+    band = f"[0:a]volume={MIX_BAND_DB}dB" + (f",afade=t=in:st=0:d={lead / 1000}" if lead else "") + "[b]"
+    # the voice copies are mono: on both sides at their own level (aformat's upmix is 3 dB lower)
+    voice = f"[1:a]aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0,adelay={lead}:all=1[v]"
+    # -ss before -i while re-encoding is exact; amix without normalize keeps both levels as they are
+    return send_mixed(song, start_ms, end_ms, 'mix', [voice_path, band_path], [
+        '-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', band_path,
+        '-ss', str(start_ms / 1000), '-t', str((end_ms - start_ms) / 1000), '-i', voice_path,
+        '-filter_complex', f"{band};{voice};[b][v]amix=inputs=2:duration=first:normalize=0[out]",
+        '-map', '[out]', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'])
+
+
+@app.route('/original/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def original(song, start_ms, end_ms):
+    """Original as visitors get it: the song from ORIGINAL_LEAD_MS before the phrase (less near the
+    song's start), fading in over that lead, to its end. MIX_BITRATE stereo. /clip/ stays the exact
+    phrase (the admin's review plays it)."""
+    music_path = os.path.join(MUSIC_DIR, f"{song}.mp3")
+    lead = min(ORIGINAL_LEAD_MS, start_ms)
+    fade = ['-af', f"afade=t=in:st=0:d={lead / 1000}"] if lead else []
+    return send_mixed(song, start_ms, end_ms, 'original', [music_path], [
+        '-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', music_path,
+        *fade, '-map', '0:a', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'])
 
 
 @app.route('/voice/<song>/<int:start_ms>-<int:end_ms>.wav')

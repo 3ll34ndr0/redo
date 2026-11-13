@@ -145,6 +145,7 @@ def test_resaltada_is_the_default_where_there_are_both_stems(client):
     assert 'href="/mix/cancion_de_prueba/9300-10100.mp3?name=' in page
     without = client.get("/search?lyric=tren+llega+tarde").get_data(as_text=True).split("<footer")[0]
     assert 'data-listen="original"' in without and 'class="listen' not in without and "/mix/" not in without
+    assert 'src="/original/otra_cancion/' in without and 'href="/original/otra_cancion/' in without
 
 
 @pytest.mark.parametrize("url", [
@@ -191,6 +192,32 @@ def test_mix_leads_with_the_band_fading_in(client):
     r = client.get("/mix/cancion_de_prueba/5000-7000.mp3?name=Prueba%20-%20vamos.mp3")
     assert r.headers["Content-Disposition"].startswith("attachment")
     assert metric("extractos_clips_total", result="cached", kind="mix_download") >= 1
+
+
+@pytest.mark.parametrize("url", [
+    "/original/no_such_song/1000-2000.mp3",        # unknown song
+    "/original/cancion_de_prueba/3000-2000.mp3",   # ends before it starts
+    "/original/cancion_de_prueba/0-61000.mp3",     # longer than 60 s, like /clip
+])
+def test_bad_original_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+def test_original_fades_in_before_the_phrase(client):
+    """Original: the song from 0.3 s before the phrase, fading in over those 0.3 s."""
+    before = metric("extractos_clips_total", result="cut", kind="original_play")
+    r = client.get("/original/otra_cancion/5000-7000.mp3")
+    assert r.status_code == 200 and r.mimetype == "audio/mpeg"
+    assert metric("extractos_clips_total", result="cut", kind="original_play") == before + 1
+    levels, duration = mp3_levels(r.data, 0.1)
+    assert 2.25 <= duration <= 2.4                                      # 0.3 s lead + the 2 s phrase
+    assert levels[0] < levels[1] < levels[2] < levels[4] - 1            # the fade-in, then the steady tone
+    _, duration = mp3_levels(client.get("/original/otra_cancion/100-1100.mp3").data, 0.1)
+    assert 1.05 <= duration <= 1.2                                      # near the start: a 0.1 s lead
+    # /clip/ stays the exact phrase (the admin's review)
+    _, duration = mp3_levels(client.get("/clip/otra_cancion/5000-7000.mp3").data, 0.1)
+    assert 1.95 <= duration <= 2.1
 
 
 def test_share_events(client):
