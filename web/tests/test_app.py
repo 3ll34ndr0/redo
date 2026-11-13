@@ -137,6 +137,62 @@ def test_voice_window(client, song, source):
         assert abs(w.getnframes() / 16000 - 10.8) < 0.01      # sample 0 is 4.3 s, no padding
     assert metric("extractos_clips_total", result="cut", kind="voice") == before + 1
 
+def test_resaltada_is_the_default_where_there_are_both_stems(client):
+    """Resaltada | Original starts on Resaltada: the player and Descargar give /mix/….mp3."""
+    page = client.get("/search?lyric=sale+sobre").get_data(as_text=True).split("<footer")[0]
+    assert 'data-listen="mix"' in page and 'class="listen' in page
+    assert 'src="/mix/cancion_de_prueba/9300-10100.mp3"' in page
+    assert 'href="/mix/cancion_de_prueba/9300-10100.mp3?name=' in page
+    without = client.get("/search?lyric=tren+llega+tarde").get_data(as_text=True).split("<footer")[0]
+    assert 'data-listen="original"' in without and 'class="listen' not in without and "/mix/" not in without
+
+
+@pytest.mark.parametrize("url", [
+    "/mix/no_such_song/1000-2000.mp3",             # unknown song
+    "/mix/otra_cancion/1000-2000.mp3",             # no stems: never the plain clip instead
+    "/mix/cancion_de_prueba/3000-2000.mp3",        # ends before it starts
+    "/mix/cancion_de_prueba/0-61000.mp3",          # longer than 60 s, like /clip
+])
+def test_bad_mix_requests(client, url):
+    assert client.get(url).status_code == 404
+
+
+def mp3_levels(data, step_s):
+    """RMS level (dB) of each step_s of an mp3, and its duration."""
+    import subprocess
+    import tempfile
+    with tempfile.NamedTemporaryFile(suffix=".mp3") as f:
+        f.write(data)
+        f.flush()
+        n = int(44100 * step_s)
+        out = subprocess.run(["ffmpeg", "-v", "error", "-i", f.name, "-af",
+                              f"asetnsamples={n},astats=metadata=1:reset=1,ametadata=print:key=lavfi.astats.Overall.RMS_level:file=-",
+                              "-f", "null", "-"], capture_output=True, text=True).stdout
+        duration = float(subprocess.run(["ffprobe", "-v", "error", "-show_entries", "format=duration", "-of", "csv=p=0", f.name],
+                                        capture_output=True, text=True).stdout)
+    return [float(line.split("=")[1]) for line in out.splitlines() if "RMS_level" in line], duration
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg (the smoke test covers the image's)")
+def test_mix_leads_with_the_band_fading_in(client):
+    """Resaltada: a second of band fading in before the phrase, then voice + band; stereo mp3."""
+    before = metric("extractos_clips_total", result="cut", kind="mix_play")
+    r = client.get("/mix/cancion_de_prueba/5000-7000.mp3")
+    assert r.status_code == 200 and r.mimetype == "audio/mpeg"
+    assert "max-age=86400" in r.headers["Cache-Control"]
+    assert metric("extractos_clips_total", result="cut", kind="mix_play") == before + 1
+    levels, duration = mp3_levels(r.data, 0.25)
+    assert 2.95 <= duration <= 3.1                                     # 1 s lead + the 2 s phrase
+    assert levels[0] < levels[1] < levels[2] < levels[3] - 1            # the fade-in
+    assert levels[5] > levels[3] + 1                                    # the voice comes in at 1 s
+    # near the song's start the lead is what there is: 0.4 s
+    _, duration = mp3_levels(client.get("/mix/cancion_de_prueba/400-1400.mp3").data, 0.25)
+    assert 1.35 <= duration <= 1.5
+    r = client.get("/mix/cancion_de_prueba/5000-7000.mp3?name=Prueba%20-%20vamos.mp3")
+    assert r.headers["Content-Disposition"].startswith("attachment")
+    assert metric("extractos_clips_total", result="cached", kind="mix_download") >= 1
+
+
 def test_share_events(client):
     before = metric("extractos_shares_total", result="shared")
     assert client.post("/event", data=json.dumps({"type": "share", "result": "shared"})).status_code == 204

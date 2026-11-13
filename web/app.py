@@ -28,6 +28,12 @@ MUSIC_DIR = os.getenv("LIBRARY_PATH")
 # Vocal stems (<song>.mp3, Demucs, same timeline as the songs) for the timing editor; a song
 # without one falls back to the song itself. Default: vocals/ next to the songs' folder.
 VOCALS_DIR = os.getenv("VOCALS_PATH") or os.path.join(os.path.dirname(os.path.abspath(MUSIC_DIR or ".")), "vocals")
+# Band stems (<song>.mp3, Demucs no_vocals, same timeline) for Resaltada: voice + band MIX_BAND_DB
+# lower, the band coming in MIX_LEAD_MS before the voice. Default: band/ next to the songs' folder.
+BAND_DIR = os.getenv("BAND_PATH") or os.path.join(os.path.dirname(os.path.abspath(MUSIC_DIR or ".")), "band")
+MIX_BAND_DB = -3
+MIX_LEAD_MS = 1000                    # the band's fade-in, ending where the voice starts
+MIX_BITRATE = "128k"
 SNIPPET_DIR = os.getenv("SNIPPET_CACHE_DIR") or os.path.join(app.static_folder, "snippets")
 MAX_RESULTS = 10
 MAX_CLIP_S = 60
@@ -157,6 +163,11 @@ def file_name(song, tokens):
     return f"{title(song)} - {words}.mp3" if words else f"{title(song)}.mp3"
 
 
+def has_mix(song):
+    """Both stems on the server: Resaltada can be made."""
+    return all(os.path.exists(os.path.join(d, f"{song}.mp3")) for d in (VOCALS_DIR, BAND_DIR))
+
+
 def clip_url(song, start, end):
     return url_for('clip', song=song, start_ms=int(start * 1000), end_ms=int(end * 1000))
 
@@ -236,6 +247,7 @@ def search():
             'filename': file_name(hit.song, tokens),
             'time': clock(hit.start),
             'clip': clip_url(hit.song, hit.start, hit.end),
+            'mix': has_mix(hit.song),          # Resaltada | Original, Resaltada first
             'others': [{'time': clock(o.start), 'clip': clip_url(o.song, o.start, o.end)} for o in hit.others],
         })
     exact = any(r['kind'] != 'approx' for r in results)     # 'partial' = what was typed, completed
@@ -373,6 +385,44 @@ def clip(song, start_ms, end_ms):
         abort(500)
     # The URL holds the exact timing, so a clip never changes: browsers and Cloudflare may keep it
     name = os.path.basename(request.args.get('name', ''))
+    if name:
+        return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
+    return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)
+
+
+@app.route('/mix/<song>/<int:start_ms>-<int:end_ms>.mp3')
+@limiter.limit("60/minute;600/hour")
+@limiter.shared_limit("600/minute", scope="all-clips", key_func=lambda: "all")
+def mix(song, start_ms, end_ms):
+    """Resaltada: the phrase start..end (ms) from the vocal stem, over the band stem MIX_BAND_DB
+    lower. The band starts MIX_LEAD_MS earlier with a fade-in of that length, so it's at its full
+    level when the voice comes in; both stop at end. The file is MIX_LEAD_MS longer than the clip
+    (less near the song's start). Re-encoded (MIX_BITRATE stereo), cut on first request and cached.
+    ?name=<file name> sends it as a download with that name. 404 without both stems."""
+    if song not in get_index().songs or not 0 <= start_ms < end_ms <= start_ms + MAX_CLIP_S * 1000:
+        abort(404)
+    voice_path, band_path = (os.path.join(d, f"{song}.mp3") for d in (VOCALS_DIR, BAND_DIR))
+    name = os.path.basename(request.args.get('name', ''))
+    kind = 'mix_download' if name else 'mix_play'
+    output_path = os.path.join(SNIPPET_DIR, f"mix_{song.replace(' ', '_')}_{start_ms}_{end_ms}.mp3")
+    result, ffmpeg_ms = 'cached', None
+    if not os.path.exists(output_path):
+        if not (os.path.exists(voice_path) and os.path.exists(band_path)):
+            abort(404)
+        lead = min(MIX_LEAD_MS, start_ms)
+        band = f"[0:a]volume={MIX_BAND_DB}dB" + (f",afade=t=in:st=0:d={lead / 1000}" if lead else "") + "[b]"
+        # the voice copies are mono: on both sides at their own level (aformat's upmix is 3 dB lower)
+        voice = f"[1:a]aformat=channel_layouts=mono,pan=stereo|c0=c0|c1=c0,adelay={lead}:all=1[v]"
+        # -ss before -i while re-encoding is exact; amix without normalize keeps both levels as they are
+        result, ffmpeg_ms = cut(['-ss', str((start_ms - lead) / 1000), '-t', str((end_ms - start_ms + lead) / 1000), '-i', band_path,
+                                 '-ss', str(start_ms / 1000), '-t', str((end_ms - start_ms) / 1000), '-i', voice_path,
+                                 '-filter_complex', f"{band};{voice};[b][v]amix=inputs=2:duration=first:normalize=0[out]",
+                                 '-map', '[out]', '-map_metadata', '-1', '-c:a', 'libmp3lame', '-b:a', MIX_BITRATE, '-f', 'mp3'],
+                                output_path, song, start_ms, end_ms)
+    obs.CLIPS.labels(result, kind).inc()
+    obs.log("clip", song=song, start_ms=start_ms, end_ms=end_ms, result=result, kind=kind, ffmpeg_ms=ffmpeg_ms)
+    if not os.path.exists(output_path):
+        abort(500)
     if name:
         return send_file(output_path, mimetype='audio/mpeg', as_attachment=True, download_name=name, max_age=CLIP_MAX_AGE)
     return send_file(output_path, mimetype='audio/mpeg', max_age=CLIP_MAX_AGE)

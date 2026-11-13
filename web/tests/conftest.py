@@ -32,9 +32,18 @@ if HAS_FFMPEG:
     subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"sine=frequency=660:duration={fixture.SONG_SECONDS}",
                     "-ac", "1", "-c:a", "libmp3lame", "-b:a", "64k", os.path.join(DATA, "vocals", f"{fixture.VOCALS_SONG}.mp3")],
                    check=True)
+# and a band stem (stereo, a third tone): that song gets Resaltada (/mix/), the other one doesn't
+os.makedirs(os.path.join(DATA, "band"))
+if HAS_FFMPEG:
+    subprocess.run(["ffmpeg", "-v", "error", "-f", "lavfi", "-i", f"sine=frequency=330:duration={fixture.SONG_SECONDS}",
+                    "-ac", "2", "-c:a", "libmp3lame", "-b:a", "128k", os.path.join(DATA, "band", f"{fixture.VOCALS_SONG}.mp3")],
+                   check=True)
+else:                   # enough for the page to offer Resaltada (it only checks the files exist)
+    for stem in ("vocals", "band"):
+        open(os.path.join(DATA, stem, f"{fixture.VOCALS_SONG}.mp3"), "wb").close()
 
 os.environ.update(DB_PATH=os.path.join(DATA, "redondos.db"), LIBRARY_PATH=os.path.join(DATA, "music"),
-                  VOCALS_PATH=os.path.join(DATA, "vocals"),
+                  VOCALS_PATH=os.path.join(DATA, "vocals"), BAND_PATH=os.path.join(DATA, "band"),
                   SNIPPET_CACHE_DIR=os.path.join(DATA, "cache"), REPORTS_DB=os.path.join(DATA, "reports.db"),
                   METRICS_PORT="0",
                   # /admin: tokens signed by the test key (tokens.py), not Cloudflare's
