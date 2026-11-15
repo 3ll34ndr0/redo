@@ -308,8 +308,10 @@ def suggest():
 @limiter.shared_limit("500/day", scope="all-transcriptions", key_func=lambda: "all")
 def transcribe():
     """The mic button: a recording (multipart field "audio") → {"text": what was said}."""
-    if not stt.enabled():
+    if not stt.configured():
         abort(404)
+    if not stt.enabled():
+        return jsonify(error="no_credit"), 503
     if (request.content_length or 0) > MAX_RECORDING_BYTES + 4096:     # before reading it
         abort(413)
     audio = request.files.get('audio')
@@ -323,9 +325,12 @@ def transcribe():
         with obs.tracer.start_as_current_span("stt"):
             text = stt.transcribe(data, audio.filename or 'grabacion', audio.mimetype)
     except stt.Unavailable as e:
-        obs.TRANSCRIPTIONS.labels('failed').inc()
-        obs.log("transcribe", level="error", outcome="failed", error=str(e), bytes=len(data))
-        return jsonify(error="unavailable"), 502
+        no_credit = isinstance(e, stt.NoCredit)
+        outcome = 'no_credit' if no_credit else 'failed'
+        obs.TRANSCRIPTIONS.labels(outcome).inc()
+        obs.log("transcribe", level="error", outcome=outcome, error=str(e), bytes=len(data))
+        # 503: the page hides the mic button (the server hides it too, for stt.NO_CREDIT_PAUSE_S)
+        return (jsonify(error="no_credit"), 503) if no_credit else (jsonify(error="unavailable"), 502)
     outcome = 'text' if text else 'empty'
     obs.TRANSCRIPTIONS.labels(outcome).inc()
     obs.log("transcribe", outcome=outcome, text=text[:200], bytes=len(data),

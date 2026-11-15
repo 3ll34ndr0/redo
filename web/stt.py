@@ -1,23 +1,36 @@
 """Speech to text for the mic button: the visitor says (or sings) the phrase, Orchardrun's
 transcription API (OpenAI-compatible /v1/audio/transcriptions) turns it into text to search.
-Same service and settings as ~/Documentos/lectura. No key (ORCHARDRUN_API_KEY): no mic button."""
+Same service and settings as ~/Documentos/lectura. No key (ORCHARDRUN_API_KEY): no mic button.
+Out of credit (HTTP 402): no mic button for NO_CREDIT_PAUSE_S; then one recording tries again."""
 
 import json
 import os
+import time
 import urllib.error
 import urllib.request
 import uuid
 
 URL = os.getenv("ORCHARDRUN_STT_URL", "https://api.orchardrun.com/v1/audio/transcriptions")
 TIMEOUT_S = 30
+NO_CREDIT_PAUSE_S = 7 * 24 * 3600
+_no_credit_until = 0.0
 
 
 class Unavailable(Exception):
     """The service can't be reached or refused the audio (the reason is in the message, for the log)."""
 
 
-def enabled():
+class NoCredit(Unavailable):
+    """The account ran out of credit (HTTP 402): the mic button hides for a while."""
+
+
+def configured():
     return bool(os.getenv("ORCHARDRUN_API_KEY"))
+
+
+def enabled():
+    """The mic button is shown: a key, and no 402 in the last NO_CREDIT_PAUSE_S."""
+    return configured() and time.time() >= _no_credit_until
 
 
 def _multipart(fields, file_field, filename, content_type, data):
@@ -44,6 +57,10 @@ def transcribe(audio, filename, content_type):
             answer = json.load(resp)
     except urllib.error.HTTPError as e:
         # kept for the log only: it may show account or billing details
+        if e.code == 402:
+            global _no_credit_until
+            _no_credit_until = time.time() + NO_CREDIT_PAUSE_S
+            raise NoCredit(f"HTTP 402: {e.read()[:300].decode(errors='replace')}") from None
         raise Unavailable(f"HTTP {e.code}: {e.read()[:300].decode(errors='replace')}") from None
     except (urllib.error.URLError, TimeoutError, ValueError) as e:
         raise Unavailable(repr(e)) from None

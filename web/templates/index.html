@@ -62,21 +62,22 @@
         <p class="text-gray-600 font-medium">Cuando la mejor respuesta está en una canción de los Redondos:</p>
     </header>
 
-    <main class="max-w-2xl mx-auto px-4">
-        <div class="relative bg-white rounded-2xl shadow-2xl p-2 mb-10 flex items-center">
+    <main class="max-w-2xl mx-auto px-2 sm:px-4">
+        {# phones: smaller buttons and padding, so the box gets most of the width #}
+        <div class="relative bg-white rounded-2xl shadow-2xl p-1 sm:p-2 mb-10 flex items-center">
             <form action="/search" method="get" class="flex w-full" id="search-form">
                 <input type="text" name="lyric" required id="lyric" value="{{ query or '' }}"
                     autocomplete="off" role="combobox" aria-autocomplete="list" aria-controls="suggestions" aria-expanded="false"
                     placeholder="Ej: 'todo un palo' o 'ñam fri frufi'..." 
-                    class="w-full min-w-0 px-6 py-4 rounded-xl focus:outline-none text-lg text-gray-700">
+                    class="w-full min-w-0 px-3 sm:px-6 py-3 sm:py-4 rounded-xl focus:outline-none text-lg text-gray-700">
                 {% if voice_search %}
                 {# shown by the script below where the browser can record (HTTPS or localhost) #}
                 <button type="button" id="mic" hidden data-state="idle" aria-label="Decir la frase" title="Cantá o decí al menos 6 palabras"
-                    class="mic shrink-0 mr-2 px-4 py-4 rounded-xl font-bold border-2 border-[#74ACDF] text-[#74ACDF]">🎤</button>
+                    class="mic shrink-0 mr-1 sm:mr-2 px-2 sm:px-4 py-2 sm:py-4 rounded-xl font-bold border-2 border-[#74ACDF] text-[#74ACDF]">🎤</button>
                 {% endif %}
-                <button type="submit" 
-                    class="btn-celeste text-white px-8 py-4 rounded-xl font-bold shadow-md">
-                    BUSCAR
+                <button type="submit" aria-label="Buscar"
+                    class="btn-celeste shrink-0 text-white px-3 sm:px-8 py-2 sm:py-4 rounded-xl font-bold shadow-md">
+                    <span class="sm:hidden" aria-hidden="true">🔍</span><span class="hidden sm:inline">BUSCAR</span>
                 </button>
             </form>
             <p id="mic-status" class="absolute left-0 right-0 top-full mt-2 text-center text-sm text-gray-700" aria-live="polite"></p>
@@ -489,6 +490,11 @@
             body.append('audio', new File([blob], 'grabacion.' + (type.split('/')[1] || 'webm'), { type }));
             try {
                 const r = await fetch('/transcribe', { method: 'POST', body });
+                if (r.status === 503) {     // out of credit: no voice search for now
+                    setMic('idle', 'La búsqueda por voz no está disponible por ahora. Escribí la frase.');
+                    mic.hidden = true;
+                    return;
+                }
                 if (!r.ok) {
                     setMic('idle', r.status === 429 ? 'Demasiadas grabaciones seguidas, probá más tarde.' : 'No se pudo entender la grabación. Probá de nuevo o escribila.');
                     return;

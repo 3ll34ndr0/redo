@@ -161,6 +161,16 @@ def test_mic_says_when_nothing_was_heard(page, base_url):
     expect(page.locator("#mic")).to_have_attribute("data-state", "idle")
 
 
+def test_mic_hides_when_out_of_credit(page, base_url):
+    page.add_init_script(FAKE_RECORDER)
+    page.route(base_url + "/transcribe", lambda route: route.fulfill(status=503, json={"error": "no_credit"}))
+    page.goto(base_url + "/")
+    page.locator("#mic").click()
+    page.locator("#mic").click()
+    expect(page.locator("#mic-status")).to_contain_text("no está disponible")
+    expect(page.locator("#mic")).to_be_hidden()
+
+
 # --- ¿No coincide?
 
 def test_report_panel_validation(page, base_url):
