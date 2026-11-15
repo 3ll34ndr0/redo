@@ -618,6 +618,42 @@ def test_transcribe_service_down(client, orchardrun, capsys):
     assert metric("extractos_transcriptions_total", outcome="failed") == before + 1
 
 
+
+def test_out_of_credit_hides_the_mic_for_a_while(client, orchardrun, monkeypatch):
+    import stt
+    monkeypatch.setattr(stt, "_no_credit_until", 0.0)
+
+    def out_of_credit(audio, filename, content_type):     # what stt.transcribe does on a 402
+        orchardrun[0].append(audio)
+        stt._no_credit_until = stt.time.time() + stt.NO_CREDIT_PAUSE_S
+        raise stt.NoCredit("HTTP 402: insufficient balance")
+    monkeypatch.setattr(stt, "transcribe", out_of_credit)
+    before = metric("extractos_transcriptions_total", outcome="no_credit")
+    r = client.post("/transcribe", data=recording())
+    assert r.status_code == 503 and r.get_json() == {"error": "no_credit"}
+    assert metric("extractos_transcriptions_total", outcome="no_credit") == before + 1
+    assert 'id="mic"' not in client.get("/").get_data(as_text=True)
+    calls = len(orchardrun[0])
+    assert client.post("/transcribe", data=recording()).status_code == 503      # not sent: no paid call
+    assert len(orchardrun[0]) == calls
+    monkeypatch.setattr(stt.time, "time", lambda: stt._no_credit_until + 1)     # the pause is over
+    assert 'id="mic"' in client.get("/").get_data(as_text=True)
+
+
+def test_stt_402_is_no_credit(monkeypatch):
+    import io
+    import stt
+    import urllib.error
+    monkeypatch.setenv("ORCHARDRUN_API_KEY", "test-key")
+    monkeypatch.setattr(stt, "_no_credit_until", 0.0)
+
+    def urlopen(req, timeout):
+        raise urllib.error.HTTPError(req.full_url, 402, "Payment Required", {}, io.BytesIO(b'{"detail":"insufficient balance"}'))
+    monkeypatch.setattr(stt.urllib.request, "urlopen", urlopen)
+    with pytest.raises(stt.NoCredit):
+        stt.transcribe(b"OPUS", "grabacion.webm", "audio/webm")
+    assert not stt.enabled()
+
 @pytest.mark.parametrize("data", [{}, recording(mimetype="text/plain"), recording(data=b"")])
 def test_bad_recordings_are_refused(client, orchardrun, data):
     assert client.post("/transcribe", data=data).status_code == 400
