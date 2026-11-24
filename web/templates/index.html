@@ -39,6 +39,7 @@
         .audio-card { backdrop-filter: blur(10px); background: rgba(255, 255, 255, 0.9); }
         /* Play button: our own control instead of <audio controls>, which looks different in
            every browser and collapsed to 0 px in Chrome at desktop width */
+        [hidden] { display: none !important; }      /* also over Tailwind's flex/block */
         .play-btn { position: relative; overflow: hidden; }
         .play-btn[data-state="loading"] { cursor: progress; }
         /* Resaltada | Original: what the play button, Descargar and Compartir give (songs with both stems) */
@@ -195,6 +196,46 @@
                 </div>
             {% endif %}
         </div>
+
+        {% if not searched %}
+        {# what this browser downloaded or shared: filled by static/recent.js, hidden while there's none #}
+        <section id="recent" aria-labelledby="recent-title" hidden>
+            <div class="flex items-baseline justify-between gap-4 mb-3 px-2">
+                <div>
+                    <h2 id="recent-title" class="text-xl font-bold text-gray-700">Tus últimos audios</h2>
+                    <p class="text-xs text-gray-600">Los que descargaste o compartiste. La lista se guarda en este navegador.</p>
+                </div>
+                <button type="button" class="recent-clear shrink-0 text-xs text-gray-600 underline hover:text-gray-800">Borrar todo</button>
+            </div>
+            <div class="recent-list space-y-3"></div>
+            <button type="button" class="recent-more block mx-auto mt-4 text-sm font-bold text-gray-600 underline hover:text-gray-800">Ver más</button>
+        </section>
+        <template id="recent-item">
+            <article class="recent-item audio-card rounded-xl p-3 sm:p-4 shadow-lg border-l-4 border-[#F6B40E]">
+                <div class="flex items-start gap-3">
+                    <div class="flex-1 min-w-0">
+                        <a class="recent-search recent-phrase block text-gray-800 italic break-words hover:underline" title="Buscar esta frase"></a>
+                        <div class="flex flex-wrap items-baseline gap-x-2 text-xs text-gray-500">
+                            <h3 class="font-bold"></h3><span class="recent-version"></span>
+                        </div>
+                    </div>
+                    <button type="button" class="recent-remove shrink-0 -mt-2 -mr-2 w-10 h-10 text-gray-500 hover:text-gray-800" title="Quitar de la lista">✕</button>
+                </div>
+                <div class="recent-actions mt-3 flex flex-wrap items-center gap-1.5 sm:gap-2">
+                    <button type="button" data-state="idle"
+                        class="play-btn btn-celeste text-white text-sm font-bold px-3 sm:px-4 py-2 rounded-xl shadow-md">
+                        <span class="play-label">▶ Escuchar</span><span class="play-progress" aria-hidden="true"></span>
+                    </button>
+                    <button type="button" hidden
+                        class="share btn-celeste text-white text-sm font-bold px-3 sm:px-4 py-2 rounded-xl shadow-md">Compartir</button>
+                    <a class="download text-sm font-bold px-3 sm:px-4 py-2 rounded-xl border-2 border-[#74ACDF] text-[#74ACDF] hover:bg-[#74ACDF] hover:text-white">Descargar</a>
+                    <span class="share-status text-xs text-gray-500" aria-live="polite"></span>
+                </div>
+                <p class="recent-gone mt-2 text-sm text-gray-600" hidden>Ya no está. <a class="recent-search underline">Buscar la frase</a></p>
+                <audio preload="none"></audio>
+            </article>
+        </template>
+        {% endif %}
     </main>
 
     <footer class="fixed bottom-0 w-full text-center py-4 bg-white bg-opacity-80 backdrop-blur-sm text-xs text-gray-400">
@@ -202,6 +243,7 @@
     </footer>
 
     <script src="{{ static_url('wave.js') }}"></script>
+    <script src="{{ static_url('recent.js') }}"></script>
     <script>
     // Share (WhatsApp etc.) sends the mp3 itself through the system share sheet, where the
     // browser can share files (Android Chrome, iOS Safari, Windows/macOS; needs HTTPS or localhost).
@@ -241,14 +283,18 @@
         card.dataset.clip = url;
         const out = listening(card, url);
         card.querySelector('.download').href = out + '?name=' + encodeURIComponent(card.dataset.filename);
-        if (prefetch && canShareFiles) fetchClip(out, card.dataset.filename).catch(() => {});
+        if (prefetch && canShareFiles) fetchClip(out, card.dataset.filename)
+            .catch(err => { if (err.message === '404') RecentClips.gone(card); });
     }
+
+    document.querySelectorAll('.download').forEach(a =>
+        a.addEventListener('click', () => RecentClips.add(a.closest('.audio-card'))));
 
     document.querySelectorAll('.audio-card').forEach(card => {
         if (!canShareFiles) return;
         const button = card.querySelector('.share'), status = card.querySelector('.share-status');
         button.hidden = false;
-        selectClip(card, card.dataset.clip);
+        selectClip(card, card.dataset.clip, !card.hidden);      // hidden: past "Ver más", fetched on the tap
         button.addEventListener('click', async () => {
             const url = listening(card, card.dataset.clip);
             status.textContent = '';
@@ -256,6 +302,7 @@
                 // Already downloaded: share within the tap. Otherwise wait (iOS may then refuse).
                 const file = clipFiles.get(url) || await fetchClip(url, card.dataset.filename);
                 await navigator.share({ files: [file] });
+                RecentClips.add(card);
                 report(card, 'shared');
             } catch (err) {
                 if (err.name === 'AbortError') return report(card, 'cancelled');   // closed the share sheet

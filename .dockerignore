@@ -14,3 +14,4 @@
 !web/templates/
 !web/static/og.png
 !web/static/wave.js
+!web/static/recent.js
