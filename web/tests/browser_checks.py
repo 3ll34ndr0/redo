@@ -8,10 +8,11 @@ Every test runs in each engine; BROWSERS="chromium" (space-separated) runs fewer
 
 Starts the app with gunicorn on the fixture data (conftest.py's environment), then drives
 the page: suggestions, the "¿No coincide?" panel (waveform editor: edges by mouse, tap and keyboard, colours, voice preview, fallback to the song; preview, Descargar following the
-adjustment, sending a report, reset), Resaltada | Original, other occurrences, the play button, phone width,
+adjustment, sending a report, reset), Resaltada | Original, other occurrences, the recent clips list, the play button, phone width,
 JavaScript errors.
 """
 
+import json
 import os
 import re
 import socket
@@ -326,6 +327,124 @@ def test_voice_preview_plays_the_selection(page, base_url):
 def test_song_without_vocal_stem_shows_the_song(page, base_url):
     card = open_editor(page, base_url, "tren+llega+tarde")
     assert card.locator(".wave-source").inner_text() == "la canción (no hay voz separada)"
+
+# --- Tus últimos audios (static/recent.js)
+
+# The system's share sheet: accepts (or, with window.refuse, is closed)
+FAKE_SHARE = """
+Object.defineProperty(navigator, 'canShare', { value: () => true });
+Object.defineProperty(navigator, 'share', { value: async () => {
+    if (window.refuse) throw new DOMException('closed', 'AbortError');
+} });
+"""
+
+
+def recent_entry(n, song="cancion_de_prueba"):
+    return {"clip": f"/clip/{song}/{5000 + n}-7000.mp3", "listen": "original", "song": "Cancion De Prueba",
+            "phrase": f"frase {n}", "filename": f"f{n}.mp3", "at": n}
+
+
+def store_recent(page, base_url, value):
+    page.goto(base_url + "/")
+    page.evaluate("v => localStorage.setItem('unaudio.recent', v)", value)
+    page.reload()
+
+
+def test_nothing_recent_at_first(page, base_url):
+    page.goto(base_url + "/")
+    expect(page.locator("#recent")).to_be_hidden()
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg")
+def test_downloads_are_listed_on_the_landing_page(page, base_url):
+    page.goto(base_url + "/search?lyric=nadie duerme")
+    card = page.locator(".audio-card").first
+    assert page.locator("#recent").count() == 0
+    for version in ("mix", "original", "mix"):              # the second mix: to the top, no duplicate
+        card.locator(f".listen [data-listen={version}]").click()
+        with page.expect_download():
+            card.locator(".download").click()
+    page.goto(base_url + "/")
+    items = page.locator(".recent-item")
+    expect(items).to_have_count(2)
+    expect(items.locator(".recent-version")).to_have_text(["Resaltada", "Original"])
+    expect(items.first.locator(".recent-phrase")).to_have_text("Nadie duerme")
+    expect(items.first.locator("h3")).to_have_text("Cancion De Prueba")
+    with page.expect_download() as d:
+        items.first.locator(".download").click()
+    assert d.value.suggested_filename == "Cancion De Prueba - Nadie duerme.mp3"
+    items.first.locator(".play-btn").click()
+    expect(items.first.locator(".play-btn")).to_have_attribute("data-state", "playing")
+    items.first.locator(".recent-phrase").click()
+    page.wait_for_url("**/search?lyric=Nadie%20duerme")
+
+
+@pytest.mark.skipif(not HAS_FFMPEG, reason="needs ffmpeg")
+def test_only_completed_shares_are_listed(page, base_url):
+    page.add_init_script(FAKE_SHARE)
+    page.goto(base_url + "/search?lyric=nadie duerme")
+    share = page.locator(".share").first
+    page.evaluate("window.refuse = true")
+    with page.expect_request("**/event"):
+        share.click()
+    assert page.evaluate("localStorage.getItem('unaudio.recent')") is None
+    page.evaluate("window.refuse = false")
+    with page.expect_request("**/event"):
+        share.click()
+    page.goto(base_url + "/")
+    expect(page.locator(".recent-item")).to_have_count(1)
+    with page.expect_request("**/event"):
+        page.locator(".recent-item .share").click()
+
+
+def test_recent_list_more_remove_and_clear(page, base_url):
+    fetched = []
+    page.add_init_script(FAKE_SHARE)
+    page.route("**/original/**", lambda r: (fetched.append(r.request.url), r.fulfill(body=b"x", content_type="audio/mpeg")))
+    store_recent(page, base_url, json.dumps([recent_entry(n) for n in range(25)]))
+    visible = page.locator(".recent-item:visible")
+    expect(visible).to_have_count(5)
+    page.wait_for_load_state("networkidle")
+    assert len({u.split("?")[0] for u in fetched}) == 5     # only what's shown is fetched for Compartir
+    visible.first.locator(".recent-remove").click()
+    expect(visible).to_have_count(5)
+    expect(visible.first.locator(".recent-phrase")).to_have_text("frase 1")
+    page.locator(".recent-more").click()
+    expect(visible).to_have_count(19)
+    expect(page.locator(".recent-more")).to_be_hidden()
+    page.reload()
+    expect(visible.first.locator(".recent-phrase")).to_have_text("frase 1")
+    page.once("dialog", lambda d: d.accept())
+    page.locator(".recent-clear").click()
+    expect(page.locator("#recent")).to_be_hidden()
+    page.reload()
+    expect(page.locator("#recent")).to_be_hidden()
+
+
+def test_recent_ignores_damaged_storage(page, base_url):
+    store_recent(page, base_url, "not json")
+    expect(page.locator("#recent")).to_be_hidden()
+    bad = {**recent_entry(1), "clip": "javascript:alert(1)"}
+    store_recent(page, base_url, json.dumps([None, 3, bad, {**recent_entry(2), "phrase": "<b>x</b>"}]))
+    expect(page.locator(".recent-phrase")).to_have_text(["<b>x</b>"])       # text, not HTML
+
+
+def test_recent_clip_no_longer_there(page, base_url):
+    store_recent(page, base_url, json.dumps([recent_entry(1, song="cancion_borrada")]))
+    page.locator(".recent-item .play-btn").click()
+    expect(page.locator(".recent-gone")).to_be_visible()
+    expect(page.locator(".recent-actions")).to_be_hidden()
+
+
+def test_recent_list_fits_a_phone(page, base_url):
+    page.set_viewport_size({"width": 360, "height": 740})
+    page.add_init_script(FAKE_SHARE)
+    store_recent(page, base_url, json.dumps([{**recent_entry(n), "phrase": "una frase bastante larga " * 4} for n in range(7)]))
+    expect(page.locator(".recent-item:visible")).to_have_count(5)
+    assert page.evaluate("document.documentElement.scrollWidth") <= 360
+    if os.environ.get("SHOTS"):
+        page.screenshot(path=os.path.join(os.environ["SHOTS"], "phone.png"))
+
 
 # --- Resaltada | Original (what plays, downloads and is shared)
 
