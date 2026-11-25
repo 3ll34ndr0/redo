@@ -27,7 +27,7 @@ spec:
       containers:
         - name: extractos
           # The tag is rewritten by .github/workflows/deploy.yml on every build
-          image: ghcr.io/3ll34ndr0/redo:42e7ab8cad97086b67f149ab514c23292f10b721
+          image: ghcr.io/3ll34ndr0/redo:83151a5917f99255e97014d6f4753b17467ccc6d
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
