@@ -604,3 +604,16 @@ def test_admin_sets_its_own_times_on_the_waveform(page, base_url):
     assert page.evaluate("""id => fetch(`/admin/reports/${id}/decision`, {method: 'POST',
         headers: {'Content-Type': 'application/json'}, body: JSON.stringify({decision: 'nothing'})}).then(r => r.status)""",
         report_id) == 200
+
+
+def test_ask_for_a_song_not_found(page, base_url, browser):
+    name = f"Tema Inventado {browser.browser_type.name}"
+    page.goto(base_url + "/search?lyric=xyzzy+qwerty")
+    page.get_by_label("Canción", exact=True).fill(name)
+    page.get_by_label("Artista o banda").fill("Los Ejemplo")
+    page.get_by_role("button", name="Pedir canción").click()
+    expect(page.locator("#request-status")).to_contain_text("Anotamos tu pedido")
+    expect(page.locator("#request-song")).to_be_hidden()
+    with sqlite3.connect(os.environ["REPORTS_DB"]) as conn:
+        assert conn.execute("SELECT artist, query FROM song_requests WHERE title = ?", (name,)).fetchone() == \
+            ("Los Ejemplo", "xyzzy qwerty")

@@ -19,6 +19,7 @@ import footer
 import stt
 from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
+from song_requests import SongRequests, clean, song_key
 
 app = Flask(__name__)
 
@@ -215,6 +216,14 @@ except sqlite3.Error as e:
     obs.log("reports_unavailable", level="error", path=REPORTS_DB, error=repr(e))
 
 
+# Songs visitors ask for: same file, own table. Without it the page doesn't offer the form.
+try:
+    song_requests = SongRequests(REPORTS_DB)
+except sqlite3.Error as e:
+    song_requests = None
+    obs.log("song_requests_unavailable", level="error", path=REPORTS_DB, error=repr(e))
+
+
 # Load the search index now, while the pod starts (the startup probe waits for it), so
 # /healthz and the first search don't pay for it: ~1 s with the pod's CPU limit.
 try:
@@ -293,7 +302,8 @@ def search():
     obs.SEARCH_SECONDS.observe(seconds)
     obs.log("search", query=user_query[:200], results=len(results), outcome=outcome,
             top_song=hits[0].song if hits else None, duration_ms=round(seconds * 1000, 1))
-    return render_template('index.html', query=user_query, results=results, exact=exact, searched=True)
+    return render_template('index.html', query=user_query, results=results, exact=exact, searched=True,
+                           can_request=bool(user_query) and not exact and song_requests is not None)
 
 
 @app.route('/suggest')
@@ -600,6 +610,29 @@ def report():
             shift_start_ms=None if fixed_start is None else fixed_start - start_ms,
             shift_end_ms=None if fixed_end is None else fixed_end - end_ms, auto_apply=auto_apply)
     return jsonify(id=report_id, provisional=provisional), 201
+
+
+@app.route('/request-song', methods=['POST'])
+@limiter.limit("5/minute;20/day")
+# Whole site (holds with faked IP headers): the requests live on the reports' small volume
+@limiter.shared_limit("300/day", scope="all-song-requests", key_func=lambda: "all")
+def request_song():
+    """A visitor asks for a song the search didn't find: {"title", "artist" (optional), "query"}."""
+    if song_requests is None:
+        abort(503)
+    if not same_origin():
+        abort(403)
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        abort(400, "JSON object expected")
+    title_, artist = clean(data.get('title'), 120), clean(data.get('artist'), 120)
+    if not song_key(title_, artist):
+        abort(400, "title expected")
+    query = clean(data.get('query'), 200) or None
+    request_id, new = song_requests.add(title_, artist, query)
+    obs.SONG_REQUESTS.labels('new' if new else 'repeated').inc()
+    obs.log("song_request", id=request_id, title=title_, artist=artist or None, query=query, new=new)
+    return jsonify(id=request_id), 201
 
 
 # Provisional fixes made per visitor today: {(visitor, day): n}, in memory like the rate limits

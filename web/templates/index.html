@@ -195,6 +195,23 @@
                     <p class="text-gray-500 text-lg">"No lo soñé..." No se encontraron resultados.</p>
                 </div>
             {% endif %}
+            {% if can_request %}
+            {# nothing exact: the visitor can ask for the song (POST /request-song) #}
+            <section class="bg-white bg-opacity-90 rounded-2xl p-6 shadow-xl" aria-labelledby="request-title">
+                <h2 id="request-title" class="text-xl font-bold text-gray-800">¿No está la canción? Pedila</h2>
+                <p class="text-sm text-gray-600 mt-1">Decinos cuál es y vemos si la podemos sumar.</p>
+                <form id="request-song" class="mt-4 space-y-3" data-query="{{ query }}">
+                    <label class="block text-sm font-bold text-gray-700">Canción
+                        <input type="text" name="title" required maxlength="120" autocomplete="off"
+                            class="mt-1 w-full font-normal px-3 py-2 rounded-lg border border-gray-300"></label>
+                    <label class="block text-sm font-bold text-gray-700">Artista o banda <span class="font-normal text-gray-500">(si sabés)</span>
+                        <input type="text" name="artist" maxlength="120" autocomplete="off"
+                            class="mt-1 w-full font-normal px-3 py-2 rounded-lg border border-gray-300"></label>
+                    <button type="submit" class="btn-celeste text-white font-bold px-4 py-2 rounded-xl">Pedir canción</button>
+                </form>
+                <p id="request-status" class="mt-2 text-sm text-gray-700" aria-live="polite"></p>
+            </section>
+            {% endif %}
         </div>
 
         {% if not searched %}
@@ -582,6 +599,30 @@
             else if (mic.dataset.state === 'idle') start();
         });
     }
+
+    // Ask for a song the search didn't find
+    const requestForm = document.getElementById('request-song');
+    if (requestForm) requestForm.addEventListener('submit', async e => {
+        e.preventDefault();
+        const status = document.getElementById('request-status'), button = requestForm.querySelector('button');
+        button.disabled = true;
+        status.textContent = 'Enviando…';
+        try {
+            const r = await fetch('/request-song', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ title: requestForm.elements['title'].value, artist: requestForm.elements['artist'].value,
+                                       query: requestForm.dataset.query }) });
+            if (r.ok) {
+                requestForm.hidden = true;
+                status.textContent = '¡Gracias! Anotamos tu pedido.';
+                return;
+            }
+            status.textContent = r.status === 429 ? 'Demasiados pedidos seguidos, probá más tarde.'
+                : r.status === 400 ? 'Escribí el nombre de la canción.' : 'No se pudo enviar. Probá de nuevo.';
+        } catch (err) {
+            status.textContent = 'No se pudo enviar. Probá de nuevo.';
+        }
+        button.disabled = false;
+    });
     </script>
 
 </body>

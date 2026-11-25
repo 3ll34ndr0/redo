@@ -42,6 +42,7 @@ CLIP_REPORTS = Counter("extractos_clip_reports_total", "Clips reported as not ma
                        ["problem"])
 REPORT_REVIEWS = Counter("extractos_report_reviews_total", "Clip reports reviewed by an admin on the site (/admin), by decision",
                          ["decision"])
+SONG_REQUESTS = Counter("extractos_song_requests_total", "Songs visitors asked for: new, repeated (already open)", ["result"])
 SHARES = Counter("extractos_shares_total", "Compartir button outcomes reported by the page: shared, cancelled, failed",
                  ["result"])
 TRANSCRIPTIONS = Counter("extractos_transcriptions_total", "Mic button recordings sent to speech to text: text, empty, failed, no_credit",
@@ -63,6 +64,8 @@ for _result in ("shared", "cancelled", "failed"):
     SHARES.labels(_result)
 for _outcome in ("text", "empty", "failed", "no_credit"):
     TRANSCRIPTIONS.labels(_outcome)
+for _result in ("new", "repeated"):
+    SONG_REQUESTS.labels(_result)
 for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
 for _decision in DECISIONS:
