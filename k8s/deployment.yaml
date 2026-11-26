@@ -71,6 +71,14 @@ spec:
                   name: unaudio-secrets
                   key: ORCHARDRUN_API_KEY
                   optional: true
+            # Libro de visitas (web/guestbook.py): its own Orchardrun key (own credit); without it the
+            # guestbook uses ORCHARDRUN_API_KEY, and with neither the page doesn't offer to record.
+            - name: GUESTBOOK_ORCHARDRUN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: unaudio-secrets
+                  key: GUESTBOOK_ORCHARDRUN_API_KEY
+                  optional: true
           securityContext:
             readOnlyRootFilesystem: true
             allowPrivilegeEscalation: false

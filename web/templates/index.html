@@ -54,9 +54,45 @@
         .mic[data-state="recording"] { background: #dc2626; border-color: #dc2626; color: white; animation: pulse 1s infinite; }
         .mic[data-state="sending"] { cursor: progress; opacity: 0.6; }
         @keyframes pulse { 50% { opacity: 0.7; } }
+        /* Libro de visitas: scrolling down to it the page turns into a chat (a fixed layer fades in
+           behind everything: the body's gradient can't transition); the green button records like a voice note */
+        .gb-backdrop { position: fixed; inset: 0; z-index: -1; pointer-events: none; opacity: 0; transition: opacity .6s;
+                       background-color: #efeae2;
+                       background-image: radial-gradient(#d9d2c5 1px, transparent 1px); background-size: 22px 22px; }
+        body.in-guestbook .gb-backdrop, .gb-solid { opacity: 1; }
+        .gb-solid { background-color: #efeae2; }
+        .gb-bubble { position: relative; max-width: 85%; padding: .45rem .7rem .3rem; border-radius: .6rem;
+                     box-shadow: 0 1px .5px rgba(11, 20, 26, .13); overflow-wrap: anywhere; }
+        .gb-in { background: #fff; border-top-left-radius: 0; }
+        .gb-out { background: #d9fdd3; border-top-right-radius: 0; margin-left: auto; }
+        .gb-meta { font-size: .7rem; color: #667781; text-align: right; }
+        .gb-mic { width: 3rem; height: 3rem; border-radius: 9999px; background: #00a884; color: #fff;
+                  display: grid; place-items: center; flex-shrink: 0; transition: transform .15s, background .15s;
+                  touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+        .gb-mic:hover { background: #008f6f; }
+        .gb-mic:focus-visible { outline: 3px solid #53bdeb; outline-offset: 2px; }
+        .gb-pill { flex: 1; min-width: 0; height: 3rem; border-radius: 9999px; background: #fff; display: flex;
+                   align-items: center; gap: .75rem; padding: 0 1.1rem; box-shadow: 0 1px .5px rgba(11, 20, 26, .13);
+                   color: #54656f; overflow: hidden; white-space: nowrap; }
+        .gb-dot { width: .6rem; height: .6rem; border-radius: 9999px; background: #ea0038; animation: pulse 1s infinite; }
+        .gb-lock { position: absolute; right: .25rem; bottom: 4.25rem; width: 2.5rem; padding: .5rem 0; border-radius: 9999px;
+                   background: #fff; color: #54656f; text-align: center; box-shadow: 0 1px 3px rgba(11, 20, 26, .2);
+                   font-size: .8rem; line-height: 1.1; }
+        #mensajes .gb-rec, #mensajes .gb-slide, #mensajes .gb-trash, #mensajes .gb-lock, #mensajes .gb-icon-send { display: none; }
+        #mensajes[data-state="starting"] .gb-rec, #mensajes[data-state="recording"] .gb-rec, #mensajes[data-state="locked"] .gb-rec,
+        #mensajes[data-state="recording"] .gb-slide, #mensajes[data-state="recording"] .gb-lock { display: flex; }
+        #mensajes[data-state="locked"] .gb-trash, #mensajes[data-state="locked"] .gb-icon-send { display: block; }
+        #mensajes[data-state="locked"] .gb-icon-mic { display: none; }
+        #mensajes[data-state="starting"] .gb-hint, #mensajes[data-state="recording"] .gb-hint, #mensajes[data-state="locked"] .gb-hint { display: none; }
+        #mensajes[data-state="recording"] .gb-mic { transform: scale(1.45); }
+        #mensajes[data-state="sending"] .gb-mic { opacity: .5; cursor: progress; }
+        .gb-slide { transition: color .15s; }
 {{ wave.styles() }}    </style>
 </head>
 <body class="bg-argentina min-h-screen pb-20">
+    {# the search fills at least the first screen: the guestbook comes after scrolling down #}
+    {% set gb_messages = guestbook_messages() %}
+    <div class="{{ 'min-h-[100svh] flex flex-col' if gb_messages is not none }}">
 
     <header class="text-center pt-12 pb-8">
         <h1 class="text-4xl font-extrabold text-gray-800 tracking-tight">Un Audio</h1>
@@ -237,6 +273,62 @@
         </template>
         {% endif %}
     </main>
+    {% if gb_messages is not none and not searched %}
+    <a href="#mensajes" class="block w-fit mx-auto mt-auto pt-10 pb-20 text-sm font-bold text-gray-700 hover:text-gray-900 text-center">
+        Libro de visitas<span class="block text-xl animate-bounce" aria-hidden="true">↓</span></a>
+    {% endif %}
+    </div>
+
+    {% if gb_messages is not none %}
+    {# Libro de visitas: voice messages only (static/guestbook.js → POST /guestbook → text); shown once an admin approves them #}
+    <div class="gb-backdrop" aria-hidden="true"></div>
+    <section id="mensajes" data-state="idle" aria-labelledby="guestbook-title"
+        class="relative min-h-[100svh] pt-16 pb-28">
+        <div class="max-w-2xl mx-auto px-4">
+            <header class="text-center mb-8">
+                <h2 id="guestbook-title" class="text-3xl font-extrabold text-gray-800 tracking-tight">Libro de visitas</h2>
+                <p class="text-gray-600 mt-1">Saludos, sugerencias, quejas, la canción que falta: dejalo en un audio.
+                    Lo pasamos a texto, lo leemos y queda acá.</p>
+            </header>
+            <ol class="gb-messages flex flex-col gap-2 mb-6" aria-label="Mensajes">
+                {% for m in gb_messages %}
+                <li class="gb-bubble gb-in text-gray-800" data-id="{{ m.id }}">
+                    <p>{{ m.text }}</p>
+                    <p class="gb-meta">{{ m.date }}</p>
+                </li>
+                {% else %}
+                <li class="gb-empty mx-auto px-3 py-1 rounded-lg bg-[#ffeecd] text-xs text-gray-700 text-center">Todavía no hay mensajes. ¡Dejá el primero!</li>
+                {% endfor %}
+            </ol>
+            {% if guestbook_voice %}
+            {# shown by static/guestbook.js where the browser can record (HTTPS or localhost) #}
+            <div class="gb-composer relative flex items-center gap-2" hidden>
+                <div class="gb-pill">
+                    <span class="gb-hint truncate">Mantené apretado el micrófono para grabar</span>
+                    <span class="gb-rec items-center gap-2"><span class="gb-dot"></span><span class="gb-time tabular-nums">0:00</span></span>
+                    <span class="gb-slide items-center gap-1 ml-auto text-sm">‹ Deslizá para cancelar</span>
+                    <button type="button" class="gb-trash ml-auto text-xl" aria-label="Descartar el mensaje" title="Descartar">🗑</button>
+                </div>
+                <div class="gb-lock" aria-hidden="true">🔒<br>⌃</div>
+                <button type="button" class="gb-mic" aria-label="Grabar un mensaje: mantené apretado y soltá para enviar">
+                    <svg class="gb-icon-mic" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <rect x="8.5" y="2" width="7" height="13" rx="3.5"/>
+                        <path d="M5.5 11a6.5 6.5 0 0 0 13 0h-1.8a4.7 4.7 0 0 1-9.4 0z"/>
+                        <rect x="11.1" y="17" width="1.8" height="4"/><rect x="8" y="20.2" width="8" height="1.8" rx=".9"/>
+                    </svg>
+                    <svg class="gb-icon-send" width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M3 20.5V14l9-2-9-2V3.5L22 12z"/>
+                    </svg>
+                </button>
+            </div>
+            <p class="gb-unsupported text-center text-sm text-gray-600" hidden>Para dejar un mensaje abrí la página en un navegador que pueda grabar audio.</p>
+            {% else %}
+            <p class="text-center text-sm text-gray-600">Por ahora no se pueden dejar mensajes. Volvé en unos días.</p>
+            {% endif %}
+            <p class="gb-status mt-3 min-h-[1.25rem] text-center text-sm text-gray-700" aria-live="polite"></p>
+        </div>
+    </section>
+    {% endif %}
 
     <footer class="fixed bottom-0 w-full text-center py-4 bg-white bg-opacity-80 backdrop-blur-sm text-xs text-gray-400">
         {{ footer_phrase }}
@@ -244,6 +336,7 @@
 
     <script src="{{ static_url('wave.js') }}"></script>
     <script src="{{ static_url('recent.js') }}"></script>
+    <script src="{{ static_url('guestbook.js') }}"></script>
     <script>
     // Share (WhatsApp etc.) sends the mp3 itself through the system share sheet, where the
     // browser can share files (Android Chrome, iOS Safari, Windows/macOS; needs HTTPS or localhost).
