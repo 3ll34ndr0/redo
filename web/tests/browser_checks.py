@@ -240,9 +240,46 @@ def test_guestbook_keyboard_and_out_of_credit(page, base_url):
     expect(section).to_have_attribute("data-state", "locked")
     page.wait_for_timeout(1100)
     page.keyboard.press("Enter")
-    expect(section.locator(".gb-status")).to_contain_text("no se pueden dejar mensajes")
     expect(section.locator(".gb-composer")).to_be_hidden()
     expect(section.locator(".gb-out")).to_have_count(0)
+    expect(section.locator(".gb-write")).to_be_visible()                 # the written fallback instead
+    expect(section.locator(".gb-write-why")).to_contain_text("escrito")
+
+
+def test_guestbook_written_when_the_voice_fails(page, base_url):
+    """Orchardrun down (502): the text box shows; Enter sends JSON; what was typed is shown as text, never HTML."""
+    sent = []
+
+    def post(route):
+        sent.append((route.request.headers.get("content-type", ""), route.request.post_data_json))
+        route.fulfill(status=202, json={"status": "quarantined"})
+    _, mic, _ = guestbook_page(page, base_url, {"status": 502, "json": {"error": "unavailable"}})
+    page.route(base_url + "/guestbook/text", post)
+    section = page.locator("#mensajes")
+    expect(section.locator(".gb-write")).to_be_hidden()                 # voice works: no text box
+    mic.focus()
+    page.keyboard.press("Enter")
+    page.wait_for_timeout(1100)
+    page.keyboard.press("Enter")
+    box = section.locator(".gb-write textarea")
+    expect(box).to_be_visible()
+    expect(section.locator(".gb-send")).to_be_disabled()                # nothing typed yet
+    box.fill("Hola <b>che</b>\notra línea")
+    box.press("Enter")
+    expect(section.locator(".gb-out")).to_contain_text("Hola <b>che</b>")
+    expect(section.locator(".gb-out b")).to_have_count(0)
+    expect(section.locator(".gb-out .gb-meta")).to_contain_text("lo leemos antes")
+    expect(box).to_have_value("")
+    assert sent == [("application/json", {"text": "Hola <b>che</b>\notra línea", "website": ""})]
+
+
+def test_guestbook_written_where_the_browser_cannot_record(page, base_url):
+    page.add_init_script("delete window.MediaRecorder;")
+    page.goto(base_url + "/")
+    section = page.locator("#mensajes")
+    expect(section.locator(".gb-composer")).to_be_hidden()
+    expect(section.locator(".gb-write-why")).to_contain_text("no puede grabar")
+    expect(section.locator(".gb-write textarea")).to_be_visible()
 
 
 # --- ¿No coincide?

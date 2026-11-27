@@ -1,8 +1,11 @@
-// Libro de visitas (the section at the bottom of the page): messages are left by voice only.
+// Libro de visitas (the section at the bottom of the page): messages are left by voice.
 // The green button works like a chat app's voice note: hold it to record, release to send; slide
 // left to cancel, slide up to lock (hands-free: then ➤ sends, 🗑 discards). From the keyboard,
 // Enter/Space starts a locked recording. The server turns it into text (POST /guestbook, Orchardrun);
 // an admin approves a message before it's shown here.
+// Only when the voice can't be used (no key or credit on the server, Orchardrun down, a browser that
+// can't record, no microphone permission) a written message is offered: POST /guestbook/text, which
+// keeps it in quarantine until an admin reads it.
 (() => {
     const root = document.getElementById('mensajes');
     if (!root) return;
@@ -16,25 +19,91 @@
         backdrop.classList.add('gb-solid');
     }
 
+    const status = root.querySelector('.gb-status'), list = root.querySelector('.gb-messages');
+    const say = text => { status.textContent = text; };
+
+    function bubble(content, className) {
+        root.querySelector('.gb-empty')?.remove();
+        const li = document.createElement('li'), text = document.createElement('p'), meta = document.createElement('p');
+        li.className = 'gb-bubble gb-out text-gray-800';
+        text.textContent = content;             // always as text: never HTML
+        text.className = className || '';
+        meta.className = 'gb-meta';
+        li.append(text, meta);
+        list.append(li);
+        li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+        return { li, text, meta };
+    }
+
+    // --- the written fallback
+    const write = root.querySelector('.gb-write'), box = write.querySelector('textarea');
+    const sendText = write.querySelector('.gb-send'), trap = write.querySelector('input[name="website"]');
+    let writing = false;
+
+    function offerWriting(why) {
+        write.querySelector('.gb-write-why').textContent = why;
+        write.hidden = false;
+    }
+    const fit = () => {                         // the box grows with the text, like a chat's
+        box.style.height = 'auto';
+        box.style.height = box.scrollHeight + 'px';
+        sendText.disabled = writing || !box.value.trim();
+    };
+    box.addEventListener('input', fit);
+    box.addEventListener('keydown', e => {      // Enter sends, Shift+Enter is a new line
+        if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+            e.preventDefault();
+            write.requestSubmit();
+        }
+    });
+    write.addEventListener('submit', async e => {
+        e.preventDefault();
+        const text = box.value.trim();
+        if (!text || writing) return;
+        writing = true;
+        fit();
+        say('');
+        try {
+            const r = await fetch('/guestbook/text', {
+                method: 'POST', headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ text, website: trap.value }),
+            });
+            if (r.status === 202) {
+                const b = bubble(text, 'whitespace-pre-wrap');
+                b.meta.textContent = 'Enviado ✓ · lo leemos antes de publicarlo';
+                box.value = '';
+                say('¡Gracias! Lo leemos y, si va, queda acá para todos.');
+            } else {
+                say({ 429: 'Ya dejaste varios mensajes. Probá más tarde.', 413: 'El mensaje es muy largo: hasta 500 letras.',
+                      503: 'Por ahora no podemos recibir más mensajes. Volvé en unos días.' }[r.status]
+                    || 'No se pudo enviar el mensaje. Probá de nuevo.');
+            }
+        } catch (err) {
+            say('No se pudo enviar el mensaje. Probá de nuevo.');
+        }
+        writing = false;
+        fit();
+    });
+
+    // --- the voice
     const composer = root.querySelector('.gb-composer');
-    if (!composer) return;                                   // no key, or out of credit: nothing to record
+    if (!composer) {                            // no key, or out of credit: nothing to record with
+        return offerWriting('Ahora no podemos pasar audios a texto: dejá tu mensaje escrito.');
+    }
     if (!(navigator.mediaDevices && navigator.mediaDevices.getUserMedia && window.MediaRecorder)) {
-        root.querySelector('.gb-unsupported').hidden = false;
-        return;
+        return offerWriting('Este navegador no puede grabar audio: dejá tu mensaje escrito.');
     }
     composer.hidden = false;
 
     const MAX_MS = 60000, MIN_MS = 1000, CANCEL_PX = 90, LOCK_PX = 70;
     const mic = root.querySelector('.gb-mic'), time = root.querySelector('.gb-time');
-    const slide = root.querySelector('.gb-slide'), status = root.querySelector('.gb-status');
-    const list = root.querySelector('.gb-messages');
+    const slide = root.querySelector('.gb-slide');
     // starting: waiting for the microphone (the first time the browser asks for permission)
     let state = 'idle';             // idle | starting | recording | locked | sending
     let recorder, stream, startedAt, ticker, discard, pending, lockWanted;
     let origin = null, pointer = null, tapToSend = false;
 
     const clock = ms => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
-    const say = text => { status.textContent = text; };
 
     function setState(s) {
         state = s;
@@ -55,6 +124,7 @@
         } catch (err) {
             setState('idle');
             say('Sin permiso para usar el micrófono.');
+            offerWriting('Sin micrófono también podés dejar tu mensaje escrito.');
             return;
         }
         if (pending) {                      // let go (or cancelled) before the microphone was ready
@@ -95,23 +165,10 @@
         recorder.stop();
     }
 
-    function bubble(seconds) {
-        root.querySelector('.gb-empty')?.remove();
-        const li = document.createElement('li'), text = document.createElement('p'), meta = document.createElement('p');
-        li.className = 'gb-bubble gb-out text-gray-800';
-        text.textContent = `🎤 ${clock(seconds * 1000)} · Pasando a texto…`;
-        text.className = 'text-gray-500 italic';
-        meta.className = 'gb-meta';
-        li.append(text, meta);
-        list.append(li);
-        li.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
-        return { li, text, meta };
-    }
-
     async function send(blob, ms) {
         setState('sending');
         const seconds = Math.round(ms / 100) / 10;
-        const b = bubble(seconds);
+        const b = bubble(`🎤 ${clock(seconds * 1000)} · Pasando a texto…`, 'text-gray-500 italic');
         const type = (blob.type || 'audio/webm').split(';')[0];
         const body = new FormData();
         body.append('audio', new File([blob], 'mensaje.' + (type.split('/')[1] || 'webm'), { type }));
@@ -129,9 +186,11 @@
                 say('No se escuchó nada. Probá de nuevo, más cerca del micrófono.');
             } else {
                 b.li.remove();
-                if (r.status === 503) {
+                if (r.status === 503 || r.status === 502) {      // out of credit, or Orchardrun down
                     composer.hidden = true;
-                    say('Por ahora no se pueden dejar mensajes. Volvé en unos días.');
+                    say('');
+                    offerWriting('No pudimos pasar el audio a texto: dejá tu mensaje escrito.');
+                    box.focus();
                 } else {
                     say({ 429: 'Ya dejaste varios mensajes. Probá más tarde.', 413: 'El mensaje es muy largo: hasta un minuto.' }[r.status]
                         || 'No se pudo enviar el mensaje. Probá de nuevo.');

@@ -17,18 +17,54 @@
         <h1 class="text-2xl font-extrabold text-gray-800 tracking-tight"><a href="/">Un Audio</a> · Libro de visitas</h1>
         <p class="text-xs text-gray-600 truncate">Entraste como {{ admin }} · <a href="/admin/reports" class="underline">Reportes</a></p>
         <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm">
-            {% for key, label in [('pending', 'Por revisar'), ('all', 'Todos')] %}
+            {% for key, label in [('pending', 'Por revisar'), ('all', 'Todos'), ('quarantine', 'Escritos en cuarentena')] %}
             <a href="?show={{ key }}"
                class="px-3 py-1 rounded-full font-bold {{ 'bg-gray-800 text-white' if show == key else 'bg-white/80 text-gray-700' }}"
                {% if show == key %}aria-current="page"{% endif %}>{{ label }} ({{ counts[key] }})</a>
             {% endfor %}
         </nav>
+        {% if show == 'quarantine' %}
+        <p class="mt-3 text-xs text-gray-600">Mensajes ESCRITOS (cuando no se podía grabar): cualquiera pudo mandar cualquier cosa
+            (spam, enlaces, código). Se muestran tal cual llegaron, sin ejecutar nada; los caracteres invisibles, como [U+…].
+            Publicar copia a la página solo el texto limpio (una línea, sin caracteres raros), como se ve abajo.</p>
+        {% else %}
         <p class="mt-3 text-xs text-gray-600">Publicar muestra el texto en la página (nunca el audio). Los audios se borran a los {{ audio_days }} días.</p>
+        {% endif %}
     </header>
 
     <main class="max-w-2xl mx-auto px-4 space-y-4">
+        {% if show == 'quarantine' %}
+        {% for w in written %}
+        <article class="message bg-white rounded-2xl shadow p-4 text-sm text-gray-700 border-l-4 border-amber-400"
+                 data-url="/admin/messages/written/{{ w.id }}/decision" data-on="published" data-written-id="{{ w.id }}">
+            <div class="flex items-start justify-between gap-3">
+                <p class="text-xs text-gray-500">Escrito #{{ w.id }} · {{ w.created_at | replace('T', ' ') | replace('Z', ' UTC') }} · {{ w.raw | length }} caracteres</p>
+                <span class="status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold
+                    {{ 'bg-amber-100 text-amber-800' if w.status == 'pending' else ('bg-green-100 text-green-800' if w.status == 'published' else 'bg-gray-200 text-gray-700') }}">{{ w.status_label }}</span>
+            </div>
+            {% if w.flags %}
+            <p class="mt-2 flex flex-wrap gap-1">{% for f in w.flags %}<span class="flag px-2 py-0.5 rounded bg-red-100 text-red-800 text-xs font-bold">{{ flag_labels.get(f, f) }}</span>{% endfor %}</p>
+            {% endif %}
+            <p class="mt-2 text-xs font-bold text-gray-500">Tal cual llegó</p>
+            <pre class="raw mt-1 p-2 rounded bg-gray-100 text-gray-800 text-xs whitespace-pre-wrap break-all font-mono">{{ w.visible }}</pre>
+            <p class="mt-2 text-xs font-bold text-gray-500">Se publicaría así</p>
+            <p class="clean mt-1 text-base text-gray-800 break-words">{{ w.published_text or '(nada que publicar)' }}</p>
+            {% if w.reviewed_by %}<p class="reviewed mt-2 text-xs text-gray-500">{{ w.reviewed_by }} · {{ w.reviewed_at | replace('T', ' ') | replace('Z', ' UTC') }}</p>{% endif %}
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" class="decision px-3 py-1 rounded-lg bg-[#00a884] text-white font-bold" data-decision="publish"
+                    {% if w.status == 'published' or not w.published_text %}disabled{% endif %}>Publicar</button>
+                <button type="button" class="decision px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-700 font-bold" data-decision="discard"
+                    {% if w.status == 'discarded' %}disabled{% endif %}>Descartar</button>
+                <span class="decision-status text-xs" aria-live="polite"></span>
+            </div>
+        </article>
+        {% else %}
+        <p class="text-center text-gray-600">No hay mensajes escritos.</p>
+        {% endfor %}
+        {% else %}
         {% for m in messages %}
-        <article class="message bg-white rounded-2xl shadow p-4 text-sm text-gray-700" data-id="{{ m.id }}">
+        <article class="message bg-white rounded-2xl shadow p-4 text-sm text-gray-700" data-id="{{ m.id }}"
+                 data-url="/admin/messages/{{ m.id }}/decision" data-on="approved">
             <div class="flex items-start justify-between gap-3">
                 <p class="text-xs text-gray-500">#{{ m.id }} · {{ m.created_at | replace('T', ' ') | replace('Z', ' UTC') }}{% if m.seconds %} · {{ m.seconds }} s{% endif %}</p>
                 <span class="status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold
@@ -52,6 +88,7 @@
         {% else %}
         <p class="text-center text-gray-600">{{ 'No hay mensajes por revisar.' if show == 'pending' else 'Todavía no hay mensajes.' }}</p>
         {% endfor %}
+        {% endif %}
     </main>
 
     <script>
@@ -61,7 +98,7 @@
             buttons.forEach(b => b.disabled = true);
             status.textContent = 'Guardando…';
             try {
-                const r = await fetch(`/admin/messages/${card.dataset.id}/decision`, {
+                const r = await fetch(card.dataset.url, {
                     method: 'POST', headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ decision: btn.dataset.decision }),
                 });
@@ -70,9 +107,10 @@
                 const badge = card.querySelector('.status');
                 badge.textContent = status_label;
                 badge.className = 'status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold ' +
-                    (s === 'approved' ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700');
+                    (s === card.dataset.on ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700');
                 status.textContent = '';
-                buttons.forEach(b => b.disabled = (b.dataset.decision === 'approve') === (s === 'approved'));
+                // the button of the state it's in now stays off
+                buttons.forEach(b => b.disabled = (b === buttons[0]) === (s === card.dataset.on));
             } catch (err) {
                 status.textContent = 'No se pudo guardar.';
                 buttons.forEach(b => b.disabled = false);

@@ -49,7 +49,11 @@ TRANSCRIPTIONS = Counter("extractos_transcriptions_total", "Mic button recording
                          ["outcome"])
 GUESTBOOK_MESSAGES = Counter("extractos_guestbook_messages_total",
                              "Voice messages for the guestbook: stored, empty, failed, no_credit", ["outcome"])
-GUESTBOOK_REVIEWS = Counter("extractos_guestbook_reviews_total", "Guestbook messages reviewed on /admin, by decision",
+GUESTBOOK_WRITTEN = Counter("extractos_guestbook_written_total",
+                            "Written guestbook messages (the fallback without voice): quarantined, repeated (same text already waiting), trap (a bot filled the hidden field), full (quarantine full)",
+                            ["outcome"])
+GUESTBOOK_REVIEWS = Counter("extractos_guestbook_reviews_total",
+                            "Guestbook messages reviewed on /admin, by decision: approve/hide (voice), publish/discard (written, from quarantine)",
                             ["decision"])
 CACHE_BYTES = Gauge("extractos_clip_cache_bytes", "Size of the clip cache")
 INDEX_SONGS = Gauge("extractos_index_songs", "Songs in the search index")
@@ -72,7 +76,9 @@ for _result in ("new", "repeated"):
     SONG_REQUESTS.labels(_result)
 for _outcome in ("stored", "empty", "failed", "no_credit"):
     GUESTBOOK_MESSAGES.labels(_outcome)
-for _decision in ("approve", "hide"):
+for _outcome in ("quarantined", "repeated", "trap", "full"):
+    GUESTBOOK_WRITTEN.labels(_outcome)
+for _decision in ("approve", "hide", "publish", "discard"):
     GUESTBOOK_REVIEWS.labels(_decision)
 for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
