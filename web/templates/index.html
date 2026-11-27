@@ -69,8 +69,16 @@
         .gb-mic { width: 3rem; height: 3rem; border-radius: 9999px; background: #00a884; color: #fff;
                   display: grid; place-items: center; flex-shrink: 0; transition: transform .15s, background .15s;
                   touch-action: none; user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-        .gb-mic:hover { background: #008f6f; }
-        .gb-mic:focus-visible { outline: 3px solid #53bdeb; outline-offset: 2px; }
+        .gb-mic:hover, .gb-send:hover { background: #008f6f; }
+        .gb-mic:focus-visible, .gb-send:focus-visible { outline: 3px solid #53bdeb; outline-offset: 2px; }
+        .gb-send { width: 3rem; height: 3rem; border-radius: 9999px; background: #00a884; color: #fff;
+                   display: grid; place-items: center; flex-shrink: 0; transition: background .15s; }
+        .gb-send:disabled { opacity: .5; cursor: default; }
+        .gb-input { flex: 1; min-width: 0; min-height: 3rem; max-height: 9rem; border-radius: 1.5rem; background: #fff;
+                    padding: .8rem 1.1rem; resize: none; line-height: 1.4; color: #111b21;
+                    box-shadow: 0 1px .5px rgba(11, 20, 26, .13); }
+        .gb-input:focus { outline: 2px solid #00a884; }
+        .gb-trap { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
         .gb-pill { flex: 1; min-width: 0; height: 3rem; border-radius: 9999px; background: #fff; display: flex;
                    align-items: center; gap: .75rem; padding: 0 1.1rem; box-shadow: 0 1px .5px rgba(11, 20, 26, .13);
                    color: #54656f; overflow: hidden; white-space: nowrap; }
@@ -280,9 +288,10 @@
     </div>
 
     {% if gb_messages is not none %}
-    {# Libro de visitas: voice messages only (static/guestbook.js → POST /guestbook → text); shown once an admin approves them #}
+    {# Libro de visitas: voice messages (static/guestbook.js → POST /guestbook → text); written ones only as a fallback
+       (POST /guestbook/text → quarantine); shown once an admin approves them #}
     <div class="gb-backdrop" aria-hidden="true"></div>
-    <section id="mensajes" data-state="idle" aria-labelledby="guestbook-title"
+    <section id="mensajes" data-state="idle" data-voice="{{ 1 if guestbook_voice else 0 }}" aria-labelledby="guestbook-title"
         class="relative min-h-[100svh] pt-16 pb-28">
         <div class="max-w-2xl mx-auto px-4">
             <header class="text-center mb-8">
@@ -321,10 +330,21 @@
                     </svg>
                 </button>
             </div>
-            <p class="gb-unsupported text-center text-sm text-gray-600" hidden>Para dejar un mensaje abrí la página en un navegador que pueda grabar audio.</p>
-            {% else %}
-            <p class="text-center text-sm text-gray-600">Por ahora no se pueden dejar mensajes. Volvé en unos días.</p>
             {% endif %}
+            {# the fallback when the voice can't be used (shown by static/guestbook.js): kept apart until we read it #}
+            <form class="gb-write" hidden novalidate>
+                <p class="gb-write-why mb-2 text-center text-sm text-gray-700"></p>
+                <div class="relative flex items-end gap-2">
+                    <label for="gb-text" class="sr-only">Tu mensaje</label>
+                    <textarea id="gb-text" class="gb-input" rows="1" maxlength="500" autocomplete="off"
+                        placeholder="Escribí un mensaje"></textarea>
+                    <div class="gb-trap" aria-hidden="true"><label>No completar <input type="text" name="website" tabindex="-1" autocomplete="off"></label></div>
+                    <button type="submit" class="gb-send" aria-label="Enviar el mensaje" disabled>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 20.5V14l9-2-9-2V3.5L22 12z"/></svg>
+                    </button>
+                </div>
+                <p class="mt-1 text-center text-xs text-gray-500">Los mensajes escritos los leemos antes de publicarlos. Hasta 500 letras.</p>
+            </form>
             <p class="gb-status mt-3 min-h-[1.25rem] text-center text-sm text-gray-700" aria-live="polite"></p>
         </div>
     </section>

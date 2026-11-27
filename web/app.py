@@ -424,6 +424,45 @@ def guestbook_message():
     return jsonify(id=message_id, text=text), 201
 
 
+@app.route('/guestbook/text', methods=['POST'])
+@limiter.limit("2/minute;5/day")
+# written text costs nothing to send, so fewer than voice; it all waits in quarantine for a person
+@limiter.shared_limit("50/day", scope="all-guestbook-text", key_func=lambda: "all")
+def guestbook_text():
+    """The fallback when the voice can't be used: a written message, JSON {"text", "website"}.
+    Untrusted: kept exactly as typed in QUARANTINE (guestbook.quarantine), never shown on the page until
+    an admin publishes it from /admin/messages → 202 {"status": "quarantined"}. "website" is a field
+    people never see: a bot that fills it gets the same answer and nothing is kept."""
+    if guestbook_store is None:
+        abort(404)
+    if (request.content_length or 0) > 8192:
+        abort(413)
+    if not same_origin():               # JSON only: another site's form can't send it
+        abort(403)
+    data = request.get_json(silent=True)
+    raw = data.get('text') if isinstance(data, dict) else None
+    if not isinstance(raw, str) or not raw.strip():
+        abort(400, "text expected")
+    if len(raw) > guestbook.MAX_WRITTEN:
+        abort(413)
+    if data.get('website'):
+        obs.GUESTBOOK_WRITTEN.labels('trap').inc()
+        obs.log("guestbook_written", outcome='trap', chars=len(raw))
+        return jsonify(status="quarantined"), 202
+    kept = guestbook_store.quarantine(raw)
+    if kept is None:
+        obs.GUESTBOOK_WRITTEN.labels('full').inc()
+        obs.log("guestbook_written", level="warning", outcome='full', chars=len(raw))
+        return jsonify(error="full"), 503
+    row_id, repeated = kept
+    outcome = 'repeated' if repeated else 'quarantined'
+    obs.GUESTBOOK_WRITTEN.labels(outcome).inc()
+    # never the text itself in the logs: whatever it holds stays in the quarantine
+    obs.log("guestbook_written", outcome=outcome, id=row_id, chars=len(raw),
+            flags=guestbook_store.quarantined_one(row_id)['flags'] or None)
+    return jsonify(status="quarantined"), 202
+
+
 def prune_cache():
     """Delete the oldest clips while the cache is over CACHE_MB (to 80% of it)."""
     files = []
@@ -823,6 +862,9 @@ def admin_reports():
 
 
 GUESTBOOK_STATUS_LABELS = {'pending': 'Por revisar', 'approved': 'Publicado', 'hidden': 'Oculto'}
+QUARANTINE_STATUS_LABELS = {'pending': 'En cuarentena', 'published': 'Publicado', 'discarded': 'Descartado'}
+QUARANTINE_FLAG_LABELS = {'enlace': 'Tiene un enlace', 'contacto': 'Mail o teléfono', 'html': 'HTML',
+                          'código': 'Código', 'sql': 'Parece SQL', 'repetido': 'Repetido', 'invisible': 'Caracteres invisibles'}
 
 
 @app.route('/admin/messages')
@@ -831,9 +873,19 @@ def admin_messages():
     """Guestbook messages, newest first: the ones still to review (default) or all."""
     if guestbook_store is None:
         abort(503)
-    show = 'all' if request.args.get('show') == 'all' else 'pending'
+    show = request.args.get('show') if request.args.get('show') in ('all', 'quarantine') else 'pending'
     rows = guestbook_store.all()
-    counts = {'pending': sum(r['status'] == 'pending' for r in rows), 'all': len(rows)}
+    written = guestbook_store.quarantined()
+    counts = {'pending': sum(r['status'] == 'pending' for r in rows), 'all': len(rows),
+              'quarantine': sum(r['status'] == 'pending' for r in written)}
+    if show == 'quarantine':
+        for r in written:
+            r['status_label'] = QUARANTINE_STATUS_LABELS[r['status']]
+            r['visible'] = guestbook.visible(r['raw'])          # invisible characters written as U+…
+            r['flags'] = r['flags'].split()
+            r['published_text'] = guestbook.clean(r['raw'], guestbook.MAX_TEXT)
+        return render_template('admin_messages.html', written=written, show=show, counts=counts, admin=g.admin,
+                               flag_labels=QUARANTINE_FLAG_LABELS)
     if show == 'pending':
         rows = [r for r in rows if r['status'] == 'pending']
     for r in rows:
@@ -871,6 +923,26 @@ def admin_message_decide(message_id):
     obs.log("guestbook_review", id=message_id, decision=decision)
     status = guestbook.DECISIONS[decision]
     return jsonify(status=status, status_label=GUESTBOOK_STATUS_LABELS[status])
+
+
+@app.route('/admin/messages/written/<int:row_id>/decision', methods=['POST'])
+@admin_only
+def admin_written_decide(row_id):
+    """A written message in quarantine: {"decision": "publish" (a cleaned copy shown on the page) | "discard"}"""
+    if guestbook_store is None:
+        abort(503)
+    if not same_origin():
+        abort(403)
+    data = request.get_json(silent=True)
+    decision = data.get('decision') if isinstance(data, dict) else None
+    if decision not in guestbook.QUARANTINE_DECISIONS:
+        abort(400, "decision expected: publish or discard")
+    status = guestbook_store.release(row_id, decision, g.admin)
+    if status is None:
+        abort(404)
+    obs.GUESTBOOK_REVIEWS.labels(decision).inc()
+    obs.log("guestbook_review", written_id=row_id, decision=decision)
+    return jsonify(status=status, status_label=QUARANTINE_STATUS_LABELS[status])
 
 
 def same_origin():

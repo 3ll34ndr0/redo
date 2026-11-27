@@ -11,6 +11,10 @@ import tokens
 from test_app import client, metric  # noqa: F401  (client: the fixture)
 
 
+def write(client, text, **extra):
+    return client.post("/guestbook/text", json={"text": text, **extra})
+
+
 def message(data=b"fake opus", mimetype="audio/webm", seconds="7.2"):
     return {"audio": (io.BytesIO(data), "mensaje.webm", mimetype), "seconds": seconds}
 
@@ -57,8 +61,10 @@ def test_no_key_no_recording(client, monkeypatch):
     monkeypatch.delenv("GUESTBOOK_ORCHARDRUN_API_KEY", raising=False)
     monkeypatch.delenv("ORCHARDRUN_API_KEY", raising=False)
     page = client.get("/").get_data(as_text=True)
-    assert 'id="mensajes"' in page and 'class="gb-mic"' not in page and "no se pueden dejar mensajes" in page
+    assert 'id="mensajes"' in page and 'class="gb-mic"' not in page
+    assert 'data-voice="0"' in page and 'class="gb-write"' in page            # the script offers writing instead
     assert client.post("/guestbook", data=message()).status_code == 404
+    assert write(client, "Sin micrófono, un saludo igual").status_code == 202  # writing doesn't need a key
 
 
 def test_the_section_and_the_button(client, heard):
@@ -144,3 +150,96 @@ def test_old_recordings_are_deleted(tmp_path, monkeypatch):
     new = store.add("nuevo", 3.0, b"new", "audio/webm")
     assert store.audio(old) is None and store.audio(new) == ("audio/webm", b"new")
     assert store.get(old)["text"] == "viejo"                       # the text stays
+
+
+# --- written messages: the fallback, kept in quarantine
+
+def test_a_written_message_waits_in_quarantine_exactly_as_typed(client, capsys):
+    raw = "Hola <script>alert('x')</script>\n'); DROP TABLE guestbook;-- visitá https://spam.example.com \u202eabc"
+    before = metric("extractos_guestbook_written_total", outcome="quarantined")
+    voices = len(app_module.guestbook_store.all())
+    r = write(client, raw)
+    assert r.status_code == 202 and r.get_json() == {"status": "quarantined"}
+    row = app_module.guestbook_store.quarantined()[0]
+    assert row["raw"] == raw and row["status"] == "pending"                    # stored verbatim (bound, not run)
+    assert row["flags"].split() == ["enlace", "html", "sql", "invisible"]
+    assert len(app_module.guestbook_store.all()) == voices                     # nothing in the guestbook itself
+    assert metric("extractos_guestbook_written_total", outcome="quarantined") == before + 1
+    assert "alert" not in capsys.readouterr().out                              # never in the logs
+    page = client.get("/").get_data(as_text=True)
+    assert "alert(" not in page and "spam.example" not in page                 # not on the page
+
+
+def test_written_messages_are_refused_when_malformed(client):
+    n = len(app_module.guestbook_store.quarantined())
+    assert client.post("/guestbook/text", data={"text": "un form"}).status_code == 403          # JSON only
+    assert client.post("/guestbook/text", json={"text": "hola"}, headers={"Origin": "https://evil.example"}).status_code == 403
+    assert client.post("/guestbook/text", json={"text": "hola"}, headers={"Sec-Fetch-Site": "cross-site"}).status_code == 403
+    assert write(client, "   ").status_code == 400
+    assert client.post("/guestbook/text", json={"text": ["no"]}).status_code == 400
+    assert client.post("/guestbook/text", json=["text"]).status_code == 400
+    assert write(client, "x" * (guestbook.MAX_WRITTEN + 1)).status_code == 413               # refused, not cut
+    assert client.post("/guestbook/text", json={"text": "y" * 9000}).status_code == 413
+    assert len(app_module.guestbook_store.quarantined()) == n
+
+
+def test_bots_repeats_and_a_full_quarantine(client, monkeypatch):
+    n = len(app_module.guestbook_store.quarantined())
+    assert write(client, "compre ya", website="http://bot.example").status_code == 202     # the hidden field: dropped
+    assert len(app_module.guestbook_store.quarantined()) == n
+    assert write(client, "Mismo texto otra vez").status_code == 202
+    assert write(client, "Mismo texto otra vez").status_code == 202
+    assert len(app_module.guestbook_store.quarantined()) == n + 1                           # kept once
+    pending = sum(r["status"] == "pending" for r in app_module.guestbook_store.quarantined())
+    monkeypatch.setattr(guestbook, "QUARANTINE_MAX_PENDING", pending)
+    assert write(client, "Uno más de los que entran").status_code == 503
+
+
+def test_admin_examines_and_publishes_only_a_cleaned_copy(client):
+    write(client, 'Gracias por "la página" <img src=x onerror=alert(1)>\u200b\n\nsaludos')
+    row = app_module.guestbook_store.quarantined()[0]
+    url = f"/admin/messages/written/{row['id']}/decision"
+    assert client.get("/admin/messages?show=quarantine").status_code == 404                   # no token
+    assert client.post(url, json={"decision": "publish"}).status_code == 404
+    admin = tokens.headers()
+    page = client.get("/admin/messages?show=quarantine", headers=admin).get_data(as_text=True)
+    assert f'data-written-id="{row["id"]}"' in page
+    assert "<img src=x" not in page and "&lt;img src=x onerror=alert(1)&gt;" in page          # escaped there too
+    assert "[U+200B]" in page and ">HTML<" in page
+    assert "<img src=x" not in client.get("/admin/messages", headers=admin).get_data(as_text=True)
+
+    decide = lambda d, **h: client.post(url, json={"decision": d}, headers={**admin, **h})
+    assert decide("publish", Origin="https://evil.example").status_code == 403
+    assert decide("approve").status_code == 400
+    assert client.post("/admin/messages/written/999999/decision", json={"decision": "discard"}, headers=admin).status_code == 404
+    r = decide("publish")
+    assert r.status_code == 200 and r.get_json()["status"] == "published"
+    published = app_module.guestbook_store.get(app_module.guestbook_store.quarantined_one(row["id"])["message_id"])
+    assert published["status"] == "approved" and published["seconds"] is None
+    assert published["text"] == 'Gracias por "la página" <img src=x onerror=alert(1)> saludos'   # one line, no U+200B
+    page = client.get("/").get_data(as_text=True)
+    assert "Gracias por &#34;la página&#34; &lt;img src=x onerror=alert(1)&gt; saludos" in page
+    assert "<img src=x" not in page
+    assert decide("publish").status_code == 200                                               # again: the same copy
+    assert len([m for m in app_module.guestbook_store.all() if m["text"].startswith("Gracias por")]) == 1
+    assert decide("discard").get_json()["status"] == "discarded"
+    assert "Gracias por" not in client.get("/").get_data(as_text=True)                        # hidden again
+
+
+def test_nothing_printable_is_never_published(client):
+    write(client, "\u202e\u200b\u2066")
+    row = app_module.guestbook_store.quarantined()[0]
+    assert row["flags"] == "invisible"
+    r = client.post(f"/admin/messages/written/{row['id']}/decision", json={"decision": "publish"}, headers=tokens.headers())
+    assert r.status_code == 404
+
+
+def test_discarded_written_messages_are_deleted_later(tmp_path, monkeypatch):
+    store = guestbook.Guestbook(str(tmp_path / "g.db"))
+    old, _ = store.quarantine("spam viejo")
+    store.release(old, "discard", "admin@example.com")
+    real = guestbook.time.time
+    monkeypatch.setattr(guestbook.time, "time", lambda: real() + 31 * 86400)
+    store.quarantine("otro")
+    assert store.quarantined_one(old) is None
+
