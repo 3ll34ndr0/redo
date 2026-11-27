@@ -27,7 +27,7 @@ spec:
       containers:
         - name: extractos
           # The tag is rewritten by .github/workflows/deploy.yml on every build
-          image: ghcr.io/3ll34ndr0/redo:fb0041a458e842aec5fca4788e3de22609c8c1c4
+          image: ghcr.io/3ll34ndr0/redo:83151a5917f99255e97014d6f4753b17467ccc6d
           imagePullPolicy: IfNotPresent
           ports:
             - name: http
@@ -70,6 +70,14 @@ spec:
                 secretKeyRef:
                   name: unaudio-secrets
                   key: ORCHARDRUN_API_KEY
+                  optional: true
+            # Libro de visitas (web/guestbook.py): its own Orchardrun key (own credit); without it the
+            # guestbook uses ORCHARDRUN_API_KEY, and with neither the page doesn't offer to record.
+            - name: GUESTBOOK_ORCHARDRUN_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: unaudio-secrets
+                  key: GUESTBOOK_ORCHARDRUN_API_KEY
                   optional: true
           securityContext:
             readOnlyRootFilesystem: true

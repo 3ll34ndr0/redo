@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="robots" content="noindex, nofollow">
+    <title>Un Audio | Libro de visitas</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap" rel="stylesheet">
+    <style>
+        body { font-family: 'Inter', sans-serif; background: #efeae2; }
+        .decision:disabled { opacity: .5; cursor: not-allowed; }
+    </style>
+</head>
+<body class="min-h-screen pb-20">
+    <header class="max-w-2xl mx-auto px-4 pt-8 pb-6">
+        <h1 class="text-2xl font-extrabold text-gray-800 tracking-tight"><a href="/">Un Audio</a> · Libro de visitas</h1>
+        <p class="text-xs text-gray-600 truncate">Entraste como {{ admin }} · <a href="/admin/reports" class="underline">Reportes</a></p>
+        <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm">
+            {% for key, label in [('pending', 'Por revisar'), ('all', 'Todos')] %}
+            <a href="?show={{ key }}"
+               class="px-3 py-1 rounded-full font-bold {{ 'bg-gray-800 text-white' if show == key else 'bg-white/80 text-gray-700' }}"
+               {% if show == key %}aria-current="page"{% endif %}>{{ label }} ({{ counts[key] }})</a>
+            {% endfor %}
+        </nav>
+        <p class="mt-3 text-xs text-gray-600">Publicar muestra el texto en la página (nunca el audio). Los audios se borran a los {{ audio_days }} días.</p>
+    </header>
+
+    <main class="max-w-2xl mx-auto px-4 space-y-4">
+        {% for m in messages %}
+        <article class="message bg-white rounded-2xl shadow p-4 text-sm text-gray-700" data-id="{{ m.id }}">
+            <div class="flex items-start justify-between gap-3">
+                <p class="text-xs text-gray-500">#{{ m.id }} · {{ m.created_at | replace('T', ' ') | replace('Z', ' UTC') }}{% if m.seconds %} · {{ m.seconds }} s{% endif %}</p>
+                <span class="status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold
+                    {{ 'bg-amber-100 text-amber-800' if m.status == 'pending' else ('bg-green-100 text-green-800' if m.status == 'approved' else 'bg-gray-200 text-gray-700') }}">{{ m.status_label }}</span>
+            </div>
+            <p class="mt-2 text-base text-gray-800 break-words">{{ m.text }}</p>
+            {% if m.has_audio %}
+            <audio class="mt-3 w-full" controls preload="none" src="/admin/messages/{{ m.id }}/audio"></audio>
+            {% else %}
+            <p class="mt-2 text-xs text-gray-500">El audio ya se borró.</p>
+            {% endif %}
+            {% if m.reviewed_by %}<p class="reviewed mt-2 text-xs text-gray-500">{{ m.reviewed_by }} · {{ m.reviewed_at | replace('T', ' ') | replace('Z', ' UTC') }}</p>{% endif %}
+            <div class="mt-3 flex flex-wrap items-center gap-2">
+                <button type="button" class="decision px-3 py-1 rounded-lg bg-[#00a884] text-white font-bold" data-decision="approve"
+                    {% if m.status == 'approved' %}disabled{% endif %}>Publicar</button>
+                <button type="button" class="decision px-3 py-1 rounded-lg border-2 border-gray-400 text-gray-700 font-bold" data-decision="hide"
+                    {% if m.status == 'hidden' %}disabled{% endif %}>Ocultar</button>
+                <span class="decision-status text-xs" aria-live="polite"></span>
+            </div>
+        </article>
+        {% else %}
+        <p class="text-center text-gray-600">{{ 'No hay mensajes por revisar.' if show == 'pending' else 'Todavía no hay mensajes.' }}</p>
+        {% endfor %}
+    </main>
+
+    <script>
+    document.querySelectorAll('.message').forEach(card => {
+        const buttons = card.querySelectorAll('.decision'), status = card.querySelector('.decision-status');
+        buttons.forEach(btn => btn.addEventListener('click', async () => {
+            buttons.forEach(b => b.disabled = true);
+            status.textContent = 'Guardando…';
+            try {
+                const r = await fetch(`/admin/messages/${card.dataset.id}/decision`, {
+                    method: 'POST', headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ decision: btn.dataset.decision }),
+                });
+                if (!r.ok) throw new Error(r.status);
+                const { status: s, status_label } = await r.json();
+                const badge = card.querySelector('.status');
+                badge.textContent = status_label;
+                badge.className = 'status shrink-0 px-2 py-0.5 rounded-full text-xs font-bold ' +
+                    (s === 'approved' ? 'bg-green-100 text-green-800' : 'bg-gray-200 text-gray-700');
+                status.textContent = '';
+                buttons.forEach(b => b.disabled = (b.dataset.decision === 'approve') === (s === 'approved'));
+            } catch (err) {
+                status.textContent = 'No se pudo guardar.';
+                buttons.forEach(b => b.disabled = false);
+            }
+        }));
+    });
+    </script>
+</body>
+</html>

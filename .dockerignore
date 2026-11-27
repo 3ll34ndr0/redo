@@ -9,6 +9,7 @@
 !web/fixes.py
 !web/access.py
 !web/stt.py
+!web/guestbook.py
 !web/footer.py
 !web/footer_phrases.txt
 !web/requirements.txt
@@ -16,3 +17,4 @@
 !web/static/og.png
 !web/static/wave.js
 !web/static/recent.js
+!web/static/guestbook.js

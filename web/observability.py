@@ -47,6 +47,10 @@ SHARES = Counter("extractos_shares_total", "Compartir button outcomes reported b
                  ["result"])
 TRANSCRIPTIONS = Counter("extractos_transcriptions_total", "Mic button recordings sent to speech to text: text, empty, failed, no_credit",
                          ["outcome"])
+GUESTBOOK_MESSAGES = Counter("extractos_guestbook_messages_total",
+                             "Voice messages for the guestbook: stored, empty, failed, no_credit", ["outcome"])
+GUESTBOOK_REVIEWS = Counter("extractos_guestbook_reviews_total", "Guestbook messages reviewed on /admin, by decision",
+                            ["decision"])
 CACHE_BYTES = Gauge("extractos_clip_cache_bytes", "Size of the clip cache")
 INDEX_SONGS = Gauge("extractos_index_songs", "Songs in the search index")
 INDEX_WORDS = Gauge("extractos_index_words", "Sung words in the search index")
@@ -66,6 +70,10 @@ for _outcome in ("text", "empty", "failed", "no_credit"):
     TRANSCRIPTIONS.labels(_outcome)
 for _result in ("new", "repeated"):
     SONG_REQUESTS.labels(_result)
+for _outcome in ("stored", "empty", "failed", "no_credit"):
+    GUESTBOOK_MESSAGES.labels(_outcome)
+for _decision in ("approve", "hide"):
+    GUESTBOOK_REVIEWS.labels(_decision)
 for _problem in PROBLEMS:
     CLIP_REPORTS.labels(_problem)
 for _decision in DECISIONS:

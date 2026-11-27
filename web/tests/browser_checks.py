@@ -54,7 +54,7 @@ def base_url():
     proc = subprocess.Popen([sys.executable, "-m", "gunicorn", "--bind", f"127.0.0.1:{port}", "--workers", "1",
                              "--threads", "8", "app:app"], cwd=WEB, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE,
                             env={**os.environ, "REPORTS_RECHECK_S": "0",     # a revoked report is gone at once
-                                 "ORCHARDRUN_API_KEY": "test-key"})          # mic button shown (/transcribe faked per test)
+                                 "ORCHARDRUN_API_KEY": "test-key"})          # mic + guestbook buttons shown (faked per test)
     url = f"http://127.0.0.1:{port}"
     for _ in range(60):
         try:
@@ -170,6 +170,79 @@ def test_mic_hides_when_out_of_credit(page, base_url):
     page.locator("#mic").click()
     expect(page.locator("#mic-status")).to_contain_text("no está disponible")
     expect(page.locator("#mic")).to_be_hidden()
+
+
+# --- Libro de visitas (the green button: hold, release to send, slide left to cancel, up to lock)
+
+def guestbook_page(page, base_url, answer=None):
+    """The page scrolled to the guestbook, the recorder and /guestbook faked; returns the posts sent."""
+    sent = []
+
+    def post(route):
+        sent.append(route.request.headers.get("content-type", ""))
+        route.fulfill(**(answer or {"status": 201, "json": {"id": 1, "text": "Hola, un saludo"}}))
+    page.add_init_script(FAKE_RECORDER)
+    page.route(base_url + "/guestbook", post)
+    page.goto(base_url + "/")
+    page.locator('a[href="#mensajes"]').click()
+    expect(page.locator("body")).to_have_class(re.compile("in-guestbook"))      # the background changed
+    mic = page.locator("#mensajes .gb-mic")
+    box = mic.bounding_box()
+    return sent, mic, (box["x"] + box["width"] / 2, box["y"] + box["height"] / 2)
+
+
+def test_guestbook_hold_and_release_sends(page, base_url):
+    sent, mic, (x, y) = guestbook_page(page, base_url)
+    section = page.locator("#mensajes")
+    page.mouse.move(x, y)
+    page.mouse.down()
+    expect(section).to_have_attribute("data-state", "recording")
+    expect(section.locator(".gb-slide")).to_be_visible()
+    page.wait_for_timeout(1100)
+    page.mouse.up()
+    expect(section.locator(".gb-out")).to_contain_text("Hola, un saludo")
+    expect(section.locator(".gb-out .gb-meta")).to_have_text("Enviado ✓✓")
+    expect(section).to_have_attribute("data-state", "idle")
+    assert sent and sent[0].startswith("multipart/form-data")
+
+
+def test_guestbook_short_press_slide_to_cancel_and_lock(page, base_url):
+    sent, mic, (x, y) = guestbook_page(page, base_url)
+    section = page.locator("#mensajes")
+    page.mouse.move(x, y)                  # a tap: too short, explains how
+    page.mouse.down()
+    page.mouse.up()
+    expect(section.locator(".gb-status")).to_contain_text("Mantené apretado")
+    page.mouse.down()                      # slid left: cancelled
+    page.wait_for_timeout(1100)
+    page.mouse.move(x - 120, y, steps=5)
+    expect(section.locator(".gb-status")).to_contain_text("descartado")
+    page.mouse.up()
+    page.mouse.move(x, y)                  # slid up: locked, the button sends
+    page.mouse.down()
+    page.mouse.move(x, y - 100, steps=5)
+    expect(section).to_have_attribute("data-state", "locked")
+    page.mouse.up()
+    expect(section).to_have_attribute("data-state", "locked")      # letting go doesn't send
+    expect(section.locator(".gb-trash")).to_be_visible()
+    page.wait_for_timeout(1100)
+    assert sent == []
+    mic.click()
+    expect(section.locator(".gb-out")).to_contain_text("Hola, un saludo")
+    assert len(sent) == 1
+
+
+def test_guestbook_keyboard_and_out_of_credit(page, base_url):
+    sent, mic, _ = guestbook_page(page, base_url, {"status": 503, "json": {"error": "no_credit"}})
+    section = page.locator("#mensajes")
+    mic.focus()
+    page.keyboard.press("Enter")
+    expect(section).to_have_attribute("data-state", "locked")
+    page.wait_for_timeout(1100)
+    page.keyboard.press("Enter")
+    expect(section.locator(".gb-status")).to_contain_text("no se pueden dejar mensajes")
+    expect(section.locator(".gb-composer")).to_be_hidden()
+    expect(section.locator(".gb-out")).to_have_count(0)
 
 
 # --- ¿No coincide?

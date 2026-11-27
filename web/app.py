@@ -16,6 +16,7 @@ import observability as obs
 import access
 import fixes
 import footer
+import guestbook
 import stt
 from reports import DECISIONS, OLD_PROBLEMS, PROBLEMS, ReportStore
 from search import Index
@@ -62,6 +63,9 @@ MAX_FFMPEG = 2                        # clips cut at the same time; more request
 SITE_URL = os.getenv("SITE_URL", "").rstrip("/")
 # The mic button (stt.py): a few seconds of speech, Opus/AAC at the browser's bitrate, is ~100 kB.
 MAX_RECORDING_BYTES = 1024 * 1024
+# The guestbook (guestbook.py): voice messages up to a minute (the page stops there), ~250 kB in Opus
+MAX_MESSAGE_S = 60
+MAX_MESSAGE_BYTES = 2 * 1024 * 1024
 
 footer_phrases = footer.Phrases()
 
@@ -224,6 +228,14 @@ except sqlite3.Error as e:
     obs.log("song_requests_unavailable", level="error", path=REPORTS_DB, error=repr(e))
 
 
+# The guestbook: same file, own tables. Without it the page doesn't show the section.
+try:
+    guestbook_store = guestbook.Guestbook(REPORTS_DB)
+except sqlite3.Error as e:
+    guestbook_store = None
+    obs.log("guestbook_unavailable", level="error", path=REPORTS_DB, error=repr(e))
+
+
 # Load the search index now, while the pod starts (the startup probe waits for it), so
 # /healthz and the first search don't pay for it: ~1 s with the pod's CPU limit.
 try:
@@ -248,7 +260,26 @@ def static_url(filename):
 @app.context_processor
 def site_url():
     return {'site_url': SITE_URL or request.url_root.rstrip("/"), 'voice_search': stt.enabled(),
-            'footer_phrase': footer_phrases.pick()}
+            'footer_phrase': footer_phrases.pick(),
+            'guestbook_voice': guestbook_store is not None and stt.enabled(guestbook.key_env())}
+
+
+MONTHS = "ene feb mar abr may jun jul ago sep oct nov dic".split()
+
+
+@app.template_global()
+def guestbook_messages():
+    """The approved guestbook messages, oldest first, with a short date ('26 nov'); None: no guestbook."""
+    if guestbook_store is None:
+        return None
+    try:
+        rows = guestbook_store.shown()
+    except sqlite3.Error as e:
+        obs.log("guestbook_unavailable", level="error", error=repr(e))
+        return []
+    for r in rows:
+        r['date'] = f"{int(r['created_at'][8:10])} {MONTHS[int(r['created_at'][5:7]) - 1]}"
+    return rows
 
 
 @app.route('/')
@@ -322,14 +353,7 @@ def transcribe():
         abort(404)
     if not stt.enabled():
         return jsonify(error="no_credit"), 503
-    if (request.content_length or 0) > MAX_RECORDING_BYTES + 4096:     # before reading it
-        abort(413)
-    audio = request.files.get('audio')
-    if audio is None or not (audio.mimetype or '').startswith('audio/'):
-        abort(400, "audio file expected")
-    data = audio.read(MAX_RECORDING_BYTES + 1)
-    if not data or len(data) > MAX_RECORDING_BYTES:
-        abort(413 if data else 400)
+    audio, data = recording(MAX_RECORDING_BYTES)
     t0 = time.perf_counter()
     try:
         with obs.tracer.start_as_current_span("stt"):
@@ -346,6 +370,68 @@ def transcribe():
     obs.log("transcribe", outcome=outcome, text=text[:200], bytes=len(data),
             duration_ms=round((time.perf_counter() - t0) * 1000))
     return jsonify(text=text[:200])
+
+
+def recording(max_bytes):
+    """The uploaded recording (multipart field "audio"): (FileStorage, bytes), or abort 400/413."""
+    if (request.content_length or 0) > max_bytes + 4096:     # before reading it
+        abort(413)
+    audio = request.files.get('audio')
+    if audio is None or not (audio.mimetype or '').startswith('audio/'):
+        abort(400, "audio file expected")
+    data = audio.read(max_bytes + 1)
+    if not data or len(data) > max_bytes:
+        abort(413 if data else 400)
+    return audio, data
+
+
+def from_our_page():
+    """A form post (multipart) from our own page: when the browser says where it comes from, this
+    host (another site's form can post multipart without asking, unlike JSON: see same_origin)."""
+    origin = request.headers.get('Origin')
+    if origin and urllib.parse.urlsplit(origin).netloc != request.host:
+        return False
+    return request.headers.get('Sec-Fetch-Site', 'same-origin') in ('same-origin', 'none')
+
+
+@app.route('/guestbook', methods=['POST'])
+@limiter.limit("3/minute;10/day")
+# each message is a paid transcription and a recording on the reports' small volume (holds with faked IP headers)
+@limiter.shared_limit("100/day", scope="all-guestbook", key_func=lambda: "all")
+def guestbook_message():
+    """A voice message for the guestbook (multipart "audio", optional "seconds"): transcribed and stored
+    pending → 201 {"id", "text"}; nothing heard → 200 {"text": ""}, not stored."""
+    if guestbook_store is None or not stt.configured(guestbook.key_env()):
+        abort(404)
+    if not from_our_page():
+        abort(403)
+    if not stt.enabled(guestbook.key_env()):
+        return jsonify(error="no_credit"), 503
+    audio, data = recording(MAX_MESSAGE_BYTES)
+    try:
+        seconds = round(min(max(float(request.form.get('seconds', '')), 0), MAX_MESSAGE_S + 5), 1)
+    except ValueError:
+        seconds = None
+    t0 = time.perf_counter()
+    try:
+        with obs.tracer.start_as_current_span("stt"):
+            text = stt.transcribe(data, audio.filename or 'mensaje', audio.mimetype, key_env=guestbook.key_env())
+    except stt.Unavailable as e:
+        outcome = 'no_credit' if isinstance(e, stt.NoCredit) else 'failed'
+        obs.GUESTBOOK_MESSAGES.labels(outcome).inc()
+        obs.log("guestbook_message", level="error", outcome=outcome, error=str(e), bytes=len(data))
+        return (jsonify(error="no_credit"), 503) if outcome == 'no_credit' else (jsonify(error="unavailable"), 502)
+    text = guestbook.clean(text, guestbook.MAX_TEXT)
+    duration_ms = round((time.perf_counter() - t0) * 1000)
+    if not text:
+        obs.GUESTBOOK_MESSAGES.labels('empty').inc()
+        obs.log("guestbook_message", outcome='empty', bytes=len(data), seconds=seconds, duration_ms=duration_ms)
+        return jsonify(text="")
+    message_id = guestbook_store.add(text, seconds, data, audio.mimetype)
+    obs.GUESTBOOK_MESSAGES.labels('stored').inc()
+    obs.log("guestbook_message", outcome='stored', id=message_id, text=text[:200], bytes=len(data), seconds=seconds,
+            duration_ms=duration_ms)
+    return jsonify(id=message_id, text=text), 201
 
 
 def prune_cache():
@@ -767,6 +853,57 @@ def admin_reports():
         rows = [r for r in rows if r['status'] in PENDING]
     return render_template('admin_reports.html', reports=[admin_report(r) for r in rows], show=show,
                            song=song, song_title=title(song) if song else None, counts=counts, admin=g.admin)
+
+
+GUESTBOOK_STATUS_LABELS = {'pending': 'Por revisar', 'approved': 'Publicado', 'hidden': 'Oculto'}
+
+
+@app.route('/admin/messages')
+@admin_only
+def admin_messages():
+    """Guestbook messages, newest first: the ones still to review (default) or all."""
+    if guestbook_store is None:
+        abort(503)
+    show = 'all' if request.args.get('show') == 'all' else 'pending'
+    rows = guestbook_store.all()
+    counts = {'pending': sum(r['status'] == 'pending' for r in rows), 'all': len(rows)}
+    if show == 'pending':
+        rows = [r for r in rows if r['status'] == 'pending']
+    for r in rows:
+        r['status_label'] = GUESTBOOK_STATUS_LABELS[r['status']]
+    return render_template('admin_messages.html', messages=rows, show=show, counts=counts, admin=g.admin,
+                           audio_days=guestbook.AUDIO_KEPT_DAYS)
+
+
+@app.route('/admin/messages/<int:message_id>/audio')
+@admin_only
+def admin_message_audio(message_id):
+    """The visitor's recording (only here: never public)."""
+    found = guestbook_store.audio(message_id) if guestbook_store else None
+    if found is None:
+        abort(404)
+    media_type, data = found
+    return app.response_class(data, mimetype=media_type)
+
+
+@app.route('/admin/messages/<int:message_id>/decision', methods=['POST'])
+@admin_only
+def admin_message_decide(message_id):
+    """{"decision": "approve" (shown on the page) | "hide"}"""
+    if guestbook_store is None:
+        abort(503)
+    if not same_origin():
+        abort(403)
+    data = request.get_json(silent=True)
+    decision = data.get('decision') if isinstance(data, dict) else None
+    if decision not in guestbook.DECISIONS:
+        abort(400, "decision expected: approve or hide")
+    if not guestbook_store.decide(message_id, decision, g.admin):
+        abort(404)
+    obs.GUESTBOOK_REVIEWS.labels(decision).inc()
+    obs.log("guestbook_review", id=message_id, decision=decision)
+    status = guestbook.DECISIONS[decision]
+    return jsonify(status=status, status_label=GUESTBOOK_STATUS_LABELS[status])
 
 
 def same_origin():

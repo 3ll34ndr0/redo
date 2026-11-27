@@ -19,7 +19,7 @@
 <body class="bg-argentina min-h-screen pb-20">
     <header class="max-w-2xl mx-auto px-4 pt-8 pb-6">
         <h1 class="text-2xl font-extrabold text-gray-800 tracking-tight"><a href="/">Un Audio</a> · Reportes</h1>
-        <p class="text-xs text-gray-600 truncate">Entraste como {{ admin }}</p>
+        <p class="text-xs text-gray-600 truncate">Entraste como {{ admin }} · <a href="/admin/messages" class="underline">Libro de visitas</a></p>
         <nav class="mt-4 flex flex-wrap items-center gap-2 text-sm">
             {% set song_arg = '&song=' ~ (song | urlencode) if song else '' %}
             {% for key, label in [('pending', 'Por revisar'), ('all', 'Todos')] %}
